@@ -50,7 +50,7 @@ void myformat(int size) {
   dnode root;
   root.user = 0;
   root.group = 0;
-  root.mode = (mode_t) 07771;
+  root.mode = (mode_t) 0777 | S_IFDIR;
   struct timespec mytime;
   clock_gettime(CLOCK_REALTIME, &mytime);
   root.access_time = mytime;
