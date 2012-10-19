@@ -33,7 +33,8 @@
 #include "inode.h"
 
 vcb the_vcb;
-dnode root = NULL;
+dnode root;
+int rootloaded = 0;
 
 /*
  * Initialize filesystem. Read in file system metadata and initialize
@@ -111,38 +112,41 @@ static void vfs_unmount (void *private_data) {
  */
 static int vfs_getattr(const char *path, struct stat *stbuf) {
   fprintf(stderr, "vfs_getattr called\n");
-
   // whole method needs to be reimplemented for multilevel directories
   char tmp[BLOCKSIZE];
   memset(tmp,0,BLOCKSIZE);
 
-  if (root == NULL){
+  if (rootloaded == 0){
     // load root
     dread(the_vcb.root.block, tmp);
     memcpy(&root,tmp,sizeof(dnode));
+    rootloaded = 1;
   }
 
-  dnode target_dir = NULL;
-  inode target_file = NULL;
+  dnode target_dir; 
+  inode target_file;
   int found = 0;
+  int isdir = 0;
 
-  if ( path != "/") {
-    char* filename = path + 1;
+  if ( strcmp(path, "/") == 0) {
+    char *filename = path;
+    filename ++;
     for(int i = 0; i < 116; i++){
       if (root.direct[i].valid == 0) continue;
       dread(root.direct[i].block, tmp);
       dirent contents;
       memcpy(&contents, tmp, sizeof(dirent));
       for(int j = 0; j < 64; j++){
-        if (contents[j].block.valid == 0) continue;
-        if (contents[j].name == filename) {
+        if (contents.entries[j].block.valid == 0) continue;
+        if (strcmp(contents.entries[j].name, filename) == 0) {
           found = 1;
-          dread(contents[j].block.block,tmp);
-          if(contents[j].type == 'd') {
-            memcpy(&target_dir,tmp,blocksize(dnode));
+          dread(contents.entries[j].block.block,tmp);
+          if(contents.entries[j].type == 'd') {
+            isdir = 1;
+            memcpy(&target_dir,tmp,sizeof(dnode));
           }
           else {
-            memcpy(&target_file,tmp,blocksize(dnode));
+            memcpy(&target_file,tmp,sizeof(inode));
           }
           break;
         }
@@ -160,26 +164,28 @@ static int vfs_getattr(const char *path, struct stat *stbuf) {
 
   /* 3600: YOU MUST UNCOMMENT BELOW AND IMPLEMENT THIS CORRECTLY */
   
-  if (The path represents the root directory)
+  if (isdir) {
     stbuf->st_mode  = 0777 | S_IFDIR;
     stbuf->st_uid     = target_dir.user;
     stbuf->st_gid     = target_dir.group;
-    stbuf->st_atime   = target_dir.access_time; 
-    stbuf->st_mtime   = target_dir.modify_time; 
-    stbuf->st_ctime   = target_dir.create_time;
+    stbuf->st_atime   = target_dir.access_time.tv_sec;
+    stbuf->st_mtime   = target_dir.modify_time.tv_sec; 
+    stbuf->st_ctime   = target_dir.create_time.tv_sec;
     stbuf->st_size    = target_dir.size;
     stbuf->st_blocks  = target_dir.size / BLOCKSIZE;
-    if(target.dir.size % BLOCKSIZE != 0) stbuf->stblocks += 1;
-  else 
+    if(target_dir.size % BLOCKSIZE != 0) stbuf->st_blocks += 1;
+  }
+  else {
     stbuf->st_mode  = target_file.mode | S_IFREG;
     stbuf->st_uid     = target_file.user;
     stbuf->st_gid     = target_file.group;
-    stbuf->st_atime   = target_file.access_time;
-    stbuf->st_mtime   = target_file.modify_time;
-    stbuf->st_ctime   = target_file.create_time;
+    stbuf->st_atime   = target_file.access_time.tv_sec;
+    stbuf->st_mtime   = target_file.modify_time.tv_sec;
+    stbuf->st_ctime   = target_file.create_time.tv_sec;
     stbuf->st_size    = target_file.size;
     stbuf->st_blocks  = target_file.size / BLOCKSIZE;
-    if(target.file.size % BLOCKSIZE != 0) stbuf->stblocks += 1;
+    if(target_file.size % BLOCKSIZE != 0) stbuf->st_blocks += 1;
+  }
 
   return 0;
 }
