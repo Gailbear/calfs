@@ -40,6 +40,7 @@ void myformat(int size) {
   the_vcb.root.valid |= 1;
   the_vcb.free.block = 3;
   the_vcb.free.valid |= 1;
+  the_vcb.clean = 1;
   strcpy(the_vcb.name, "my disk");
 
   char tmp[BLOCKSIZE];
