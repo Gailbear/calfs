@@ -15,6 +15,7 @@
 #include <assert.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include "3600fs.h"
 #include "disk.h"
@@ -49,9 +50,11 @@ void myformat(int size) {
   root.user = 0;
   root.group = 0;
   root.mode = (mode_t) 07771;
-  time(&root.access_time);
-  time(&root.modify_time);
-  time(&root.create_time);
+  struct timespec mytime;
+  clock_gettime(CLOCK_REALTIME, &mytime);
+  root.access_time = mytime;
+  root.modify_time = mytime;
+  root.create_time = mytime;
 
   root.direct[0].block = 2;
   root.direct[0].valid |= 1;
