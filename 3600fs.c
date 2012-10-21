@@ -176,6 +176,70 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     return 0;
 }
 
+
+
+//Returns blocknum pointing to DNODE of path within startingDir
+static blocknum startFindPath(direntry startingDir, const char *path)
+{
+  dnode dirMeta;
+
+  //Get rid of absolute path
+  if(*path == '/') path++;
+
+  //Check if we are currently in the correct directory
+  if(strlen(path) == 0)
+    return startingDir.block;
+
+  //If not in the correct directory, get meta data
+  dread(startingDir.block.block, (char *)&dirMeta);
+
+  //If permissions don't match up, kick em out.
+  if(dirMeta.user != getuid() && dirMeta.group != getgid())
+  {
+    blocknum noPerms;
+    noPerms.block = -2;
+    noPerms.valid |= 1;
+    return noPerms;
+  }
+
+  //If permissions do match up, try to traverse
+  int i = 0;
+  char *firstSlash = strchr(path, '/');
+  if(firstSlash == NULL) firstSlash = path+strlen(path);
+
+  char targetDir[(firstSlash-path)+1];
+  strncpy(targetDir, path, firstSlash-path);
+  targetDir[(firstSlash-path)] = '\0';
+
+  for(i = 0; i < 119; i++)
+  {
+    //If the block isn't valid, jump
+    if(dirMeta.direct[i].valid == 0) continue;
+
+    //If the names match traverse
+    direntry myDir;
+    dread(dirMeta.direct[i].block, (char *)&myDir);
+
+    if(strcmp(myDir.name, targetDir) == 0)
+        return startFindPath(myDir, firstSlash);
+
+  }
+
+  //Directory not found
+  blocknum nonExistant;
+  nonExistant.valid = 0;
+  return nonExistant;
+}
+
+
+//Returns blocknum pointing to DNODE of path
+static blocknum findPath(const char *path)
+{
+  direntry rootDir;
+  dread(the_vcb.root.block, (char *)&rootDir);
+  return startFindPath(rootDir, path);
+}
+
 /*
  * Given an absolute path to a file (for example /a/b/myFile), vfs_create 
  * will create a new file named myFile in the /a/b directory.
@@ -184,7 +248,102 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
  *
  */
 static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
-    return 0;
+  char *lastSlash = strrchr(path, '/');
+
+  //Is there any free space?
+  if(the_vcb.free.valid == 0)
+    return -1;
+
+  //is the filename too long?
+  if(strlen(lastSlash+1) >= 59)
+    return -2;
+
+  //Find the first free blocks and put something in them
+  blocknum firstFree = the_vcb.free;
+  freeblock firstFreeBlock;
+
+  dread(firstFree.block, (char *)&firstFreeBlock);
+
+  blocknum secondFree = firstFreeBlock.next;
+  freeblock secondFreeBlock;
+
+  dread(secondFree.block, (char *)&secondFreeBlock);
+
+  the_vcb.free = secondFreeBlock.next;
+
+  //What directory is this file in?
+  char targetDir[(lastSlash-path)+1];
+  strncpy(targetDir, path, lastSlash-path);
+  targetDir[(lastSlash-path)] = '\0';
+
+  //Pull the directory into memory. Checking for errors
+  blocknum dirBlock = findPath(targetDir);
+  if(dirBlock.valid == 0 || dirBlock.block == -1 || dirBlock.block == -2)
+    return -2;
+
+
+  dnode dirNode;
+  dread(dirBlock.block, (char *)&dirNode);
+
+  //Find the first invalid entry
+  int i;
+  blocknum invalidBlock;
+  invalidBlock.valid = 0;
+  for(i = 0; i < 119; i++)
+  {
+    if(dirNode.direct[i].valid == 0)
+    {
+      invalidBlock.valid |= 1;
+      break;
+    }
+  }
+
+  //Did we find any invalid entries? 
+  if(invalidBlock.valid == 0)
+    return -3;
+
+  invalidBlock.block = firstFree.block;
+  invalidBlock.valid |= 1;
+  dirNode.direct[i] = invalidBlock;
+
+
+  //Create new directory entry
+  direntry newEntry;
+  strncpy(newEntry.name, lastSlash+1, strlen(lastSlash+1));
+  newEntry.type = 1;
+  newEntry.block = secondFree;
+
+  //Create new file inode
+  inode newNode;
+  time_t currTime = time(NULL);
+  newNode.size = BLOCKSIZE;
+  newNode.user = getuid();
+  newNode.group = getgid();
+  newNode.mode = mode;
+  newNode.access_time = currTime;
+  newNode.modify_time = currTime;
+  newNode.create_time = currTime;
+
+  //Write everything to disk
+  char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &newNode, sizeof(inode));
+
+  dwrite(secondFree.block, tmp);
+
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &newEntry, sizeof(direntry));
+  dwrite(firstFree.block, tmp);
+
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &dirNode, sizeof(dnode));
+  dwrite(dirBlock.block, tmp);
+
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &the_vcb, sizeof(vcb));
+  dwrite(0, tmp);
+
+  return 0;
 }
 
 /*
@@ -234,11 +393,72 @@ static int vfs_write(const char *path, const char *buf, size_t size,
  */
 static int vfs_delete(const char *path)
 {
+  char *lastSlash = strrchr(path, '/');
 
   /* 3600: NOTE THAT THE BLOCKS CORRESPONDING TO THE FILE SHOULD BE MARKED
            AS FREE, AND YOU SHOULD MAKE THEM AVAILABLE TO BE USED WITH OTHER FILES */
 
-    return 0;
+  //What directory is this file in?
+  char targetDir[(lastSlash-path)+1];
+  strncpy(targetDir, path, lastSlash-path);
+  targetDir[(lastSlash-path)] = '\0';
+
+
+  blocknum dirBlock = findPath(targetDir);
+
+  //Was there an error finding the directory?
+  if(dirBlock.valid == 0 || dirBlock.block == -1 || dirBlock.block == -2)
+    return -2;
+
+  //Load directory into memory
+  dnode dirNode;
+  blocknum oldBlock;
+  dread(dirBlock.block, (char *)&dirNode);
+  int i;
+
+  for(i = 0; i < 119; i++)
+  {
+    //If the block isn't valid, jump
+    if(dirNode.direct[i].valid == 0) continue;
+
+    //If the names match traverse
+    direntry myDir;
+    dread(dirNode.direct[i].block, (char *)&myDir);
+
+    if(strcmp(myDir.name, lastSlash+1) == 0)
+    {
+      oldBlock = dirNode.direct[i];
+      dirNode.direct[i].valid = 0;
+      break;
+    }
+
+  }
+
+  //Make a free block to replace inode. Add to free block list
+  freeblock myFree;
+  myFree.next = the_vcb.free;
+
+  the_vcb.free = oldBlock;
+
+  //Write new stuff to disk
+  char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &myFree, sizeof(freeblock));
+
+  dwrite(oldBlock.block, tmp);
+
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &dirNode, sizeof(dnode));
+  dwrite(dirBlock.block, tmp);
+
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &the_vcb, sizeof(vcb));
+  dwrite(0, tmp);
+
+
+
+
+  return 0;
 }
 
 /*
