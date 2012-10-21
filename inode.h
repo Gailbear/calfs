@@ -7,8 +7,8 @@
 #define __INODE_H__
 
 typedef struct blocknum_t {
-  int block:31;
-  int valid:1;
+  unsigned int block:31;
+  unsigned int valid:1;
 } blocknum;
 
 typedef struct vcb_t {

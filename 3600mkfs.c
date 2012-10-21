@@ -44,6 +44,7 @@ void myformat(int size) {
   strcpy(the_vcb.name, "my disk");
 
   char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &the_vcb, sizeof(vcb));
   if (dwrite(0, tmp) < 0) perror("Error while writing to disk");
 
@@ -60,11 +61,12 @@ void myformat(int size) {
   root.direct[0].block = 2;
   root.direct[0].valid |= 1;
   for(int i = 1; i < 116; i++) {
-    root.direct[i].valid |= 0;
+    root.direct[i].valid &= 0;
   }
-  root.single_indirect.valid |= 0;
-  root.double_indirect.valid |= 0;
+  root.single_indirect.valid &= 0;
+  root.double_indirect.valid &= 0;
 
+  memset(tmp,0,BLOCKSIZE);
   memcpy(tmp, &root, sizeof(dnode));
   if (dwrite(1, tmp) < 0) perror("Error while writing to disk");
 
@@ -83,6 +85,7 @@ void myformat(int size) {
     root_dirent.entries[i].block.valid &= 0;
   }
 
+  memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &root_dirent, sizeof(dirent));
   if (dwrite(2, tmp) < 0) perror("Error while writing to disk");
 

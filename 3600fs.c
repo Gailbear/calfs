@@ -67,6 +67,9 @@ static void* vfs_mount(struct fuse_conn_info *conn) {
     return NULL;
   }
 
+  fprintf(stderr, "root block/valid: %u/%u\n", the_vcb.root.block, the_vcb.root.valid);
+  fprintf(stderr, "free block/valid: %u/%u\n", the_vcb.free.block, the_vcb.free.valid);
+
   if (the_vcb.clean == 1){
     the_vcb.clean = 0;
     memcpy(tmp, &the_vcb, sizeof(vcb));
@@ -75,6 +78,7 @@ static void* vfs_mount(struct fuse_conn_info *conn) {
     // check the disk
     // then set vcb to 0
   }
+
 
   return NULL;
 }
@@ -91,6 +95,7 @@ static void vfs_unmount (void *private_data) {
            KEEP DATA CACHED THAT'S NOT ON DISK */
 
   char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
   the_vcb.clean = 1;
   memcpy(tmp, &the_vcb, sizeof(vcb));
   dwrite(0, tmp);
@@ -121,8 +126,25 @@ static int vfs_getattr(const char *path, struct stat *stbuf) {
   /* 3600: YOU MUST UNCOMMENT BELOW AND IMPLEMENT THIS CORRECTLY */
   
 
-
+  if(strcmp("/",path) == 0) {
+    stbuf->st_mode = 0777 | S_IFDIR;
+    stbuf->st_uid     = root.user;
+    stbuf->st_gid     = root.group;
+    stbuf->st_atime   = root.access_time.tv_sec;
+    stbuf->st_mtime   = root.modify_time.tv_sec;
+    stbuf->st_ctime   = root.create_time.tv_sec;
+    stbuf->st_size    = root.size;
+    stbuf->st_blocks  = root.size / BLOCKSIZE;
+    if(root.size % BLOCKSIZE != 0) stbuf->st_blocks += 1;
+    return 0;
+  }
+  
   direntry target_d = findFile(path);
+
+  fprintf(stderr, "target acquired!\n");
+  
+  // if the file wasn't found, throw the expected error
+  if (target_d.block.valid == 0) return -ENOENT; 
 
   return getattr_from_direntry(target_d, stbuf);
 }
@@ -131,11 +153,10 @@ static int vfs_getattr(const char *path, struct stat *stbuf) {
 static int getattr_from_direntry(direntry target_d, struct stat *stbuf){
   inode target;
 
-  // if the file wasn't found, throw the expected error
-  if (target_d.block.valid == 0) return -ENOENT; 
 
   // read the block
   char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
   dread(target_d.block.block, tmp);
   memcpy(&target,tmp,sizeof(inode));
 
@@ -199,23 +220,32 @@ static int vfs_mkdir(const char *path, mode_t mode) {
 static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                        off_t offset, struct fuse_file_info *fi)
 {
+  fprintf(stderr, "vfs_readdir called\n");
   // for now, assume root
   load_root();
   
   char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
 
   dirent contents;
-  int found = 0;
   // for all the dirent blocks
   for (int i = 0; i < 116; i++){
+    if(root.direct[i].valid == 0) {
+      //fprintf(stderr, "direct %d is invalid\n", i);
+      continue;
+    }
     // load the ith dirent block
+    memset(tmp, 0, BLOCKSIZE);
     dread(root.direct[i].block,tmp);
     memcpy(&contents, tmp, sizeof(dirent));
+    //fprintf(stderr, "dirent %d loaded\n", i);
     // for each entry in the dirent block
     for (int j = 0; j < 64; j++) {
       // continue if entry is invalid
-      if (contents.entries[j].block.valid == 0)
+      if (contents.entries[j].block.valid == 0) {
+        //fprintf(stderr, "entry %d in dirent %d is invalid.\n", j ,i);
         continue;
+      }
       // add to the list
       struct stat stbuf;
       getattr_from_direntry(contents.entries[j], &stbuf);
@@ -232,6 +262,7 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 //Returns direntry of path
 // if it can't be found, returns a direntry with an invalid block
 static direntry findFile(const char *path){
+  fprintf(stderr, "findFile called\n");
   // for now, assuming root
   load_root();
 
@@ -243,14 +274,22 @@ static direntry findFile(const char *path){
   dirent contents;
   // for all the dirent blocks
   for (int i = 0; i < 116; i++){
+    if(root.direct[i].valid == 0) {
+      fprintf(stderr, "direct %d is invalid\n", i);
+      continue;
+    }
     // load the ith dirent block
+    memset(tmp, 0, BLOCKSIZE);
     dread(root.direct[i].block,tmp);
     memcpy(&contents, tmp, sizeof(dirent));
+    fprintf(stderr, "dirent %d loaded\n", i);
     // for each entry in the dirent block
     for (int j = 0; j < 64; j++) {
       // continue if entry is invalid
-      if (contents.entries[j].block.valid == 0)
+      if (contents.entries[j].block.valid == 0) {
+        //fprintf(stderr, "entry %d in dirent %d is invalid.\n", j ,i);
         continue;
+      }
       // compare the name
       if (strcmp(filename, contents.entries[j].name) == 0){
         // we found it! return the direntry
@@ -330,9 +369,11 @@ static blocknum startFindPath(direntry startingDir, const char *path)
 static void load_root(){
   if (root_loaded) return;
   char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
   dread(the_vcb.root.block, tmp);
   memcpy(&root, tmp, sizeof(dnode));
   root_loaded = 1;
+  fprintf(stderr, "root loaded!\n");
   return;
 }
 
