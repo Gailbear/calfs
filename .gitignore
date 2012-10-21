@@ -2,3 +2,4 @@
 3600mkfs
 *.swp
 MYDISK
+*log.txt

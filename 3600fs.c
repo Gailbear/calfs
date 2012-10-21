@@ -33,8 +33,8 @@
 #include "inode.h"
 
 vcb the_vcb;
-dnode root;
-int rootloaded = 0;
+direntry root;
+int root_loaded = 0;
 
 /*
  * Initialize filesystem. Read in file system metadata and initialize
@@ -112,50 +112,6 @@ static void vfs_unmount (void *private_data) {
  */
 static int vfs_getattr(const char *path, struct stat *stbuf) {
   fprintf(stderr, "vfs_getattr called\n");
-  // whole method needs to be reimplemented for multilevel directories
-  char tmp[BLOCKSIZE];
-  memset(tmp,0,BLOCKSIZE);
-
-  if (rootloaded == 0){
-    // load root
-    dread(the_vcb.root.block, tmp);
-    memcpy(&root,tmp,sizeof(dnode));
-    rootloaded = 1;
-  }
-
-  dnode target_dir; 
-  inode target_file;
-  int found = 0;
-  int isdir = 0;
-
-  if ( strcmp(path, "/") == 0) {
-    char *filename = path;
-    filename ++;
-    for(int i = 0; i < 116; i++){
-      if (root.direct[i].valid == 0) continue;
-      dread(root.direct[i].block, tmp);
-      dirent contents;
-      memcpy(&contents, tmp, sizeof(dirent));
-      for(int j = 0; j < 64; j++){
-        if (contents.entries[j].block.valid == 0) continue;
-        if (strcmp(contents.entries[j].name, filename) == 0) {
-          found = 1;
-          dread(contents.entries[j].block.block,tmp);
-          if(contents.entries[j].type == 'd') {
-            isdir = 1;
-            memcpy(&target_dir,tmp,sizeof(dnode));
-          }
-          else {
-            memcpy(&target_file,tmp,sizeof(inode));
-          }
-          break;
-        }
-      }
-      if (found) break;
-      // search indirects
-    }
-    if (found == 0) return ENOENT;
-  }
 
   // Do not mess with this code 
   stbuf->st_nlink = 1; // hard links
@@ -164,31 +120,41 @@ static int vfs_getattr(const char *path, struct stat *stbuf) {
 
   /* 3600: YOU MUST UNCOMMENT BELOW AND IMPLEMENT THIS CORRECTLY */
   
-  if (isdir) {
-    stbuf->st_mode  = 0777 | S_IFDIR;
-    stbuf->st_uid     = target_dir.user;
-    stbuf->st_gid     = target_dir.group;
-    stbuf->st_atime   = target_dir.access_time.tv_sec;
-    stbuf->st_mtime   = target_dir.modify_time.tv_sec; 
-    stbuf->st_ctime   = target_dir.create_time.tv_sec;
-    stbuf->st_size    = target_dir.size;
-    stbuf->st_blocks  = target_dir.size / BLOCKSIZE;
-    if(target_dir.size % BLOCKSIZE != 0) stbuf->st_blocks += 1;
+
+
+  direntry target_d = findFile(path);
+
+  return getattr_from_direntry(target_d, stbuf);
+}
+
+// helper method for getattr
+static int getattr_from_direntry(direntry target_d, struct stat *stbuf){
+  inode target;
+
+  // if the file wasn't found, throw the expected error
+  if (target_d.block.valid == 0) return -ENOENT; 
+
+  // read the block
+  char tmp[BLOCKSIZE];
+  dread(target_d.block.block, tmp);
+  memcpy(target,tmp, sizeof(inode));
+
+  if (target_d.type == 'd'){
+    stbuf->st_mode = 0777 | S_IFDIR;
   }
   else {
-    stbuf->st_mode  = target_file.mode | S_IFREG;
-    stbuf->st_uid     = target_file.user;
-    stbuf->st_gid     = target_file.group;
-    stbuf->st_atime   = target_file.access_time.tv_sec;
-    stbuf->st_mtime   = target_file.modify_time.tv_sec;
-    stbuf->st_ctime   = target_file.create_time.tv_sec;
-    stbuf->st_size    = target_file.size;
-    stbuf->st_blocks  = target_file.size / BLOCKSIZE;
-    if(target_file.size % BLOCKSIZE != 0) stbuf->st_blocks += 1;
+    stbuf->st_mode = target.mode | S_IFREG;
   }
-
-  return 0;
+  stbuf->st_uid     = target.user;
+  stbuf->st_gid     = target.group;
+  stbuf->st_atime   = target.access_time.tv_sec;
+  stbuf->st_mtime   = target.modify_time.tv_sec;
+  stbuf->st_ctime   = target.create_time.tv_sec;
+  stbuf->st_size    = target.size;
+  stbuf->st_blocks  = target.size / BLOCKSIZE;
+  if(target.size % BLOCKSIZE != 0) stbuf->st_blocks += 1;
 }
+
 
 /*
  * Given an absolute path to a directory (which may or may not end in
@@ -231,9 +197,76 @@ static int vfs_mkdir(const char *path, mode_t mode) {
 static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                        off_t offset, struct fuse_file_info *fi)
 {
+  // for now, assume root
+  if(root_loaded == 0){
+    findPath("/");
+  }
+  
+  char tmp[BLOCKSIZE];
 
-    return 0;
+  dirent contents;
+  int found = 0;
+  // for all the dirent blocks
+  for (int i = 0; i < 116; i++){
+    // load the ith dirent block
+    dread(root.direct[i].block,tmp);
+    memcpy(contents, tmp, sizeof(dirent));
+    // for each entry in the dirent block
+    for (int j = 0; j < 64; j++) {
+      // continue if entry is invalid
+      if (contents.entries[j].block.valid == 0)
+        continue;
+      // add to the list
+      struct stat stbuf;
+      getattr_from_direntry(contents.entries[j], &stbuf);
+      if(filler(buf, contents.entries[j].name, stbuf, 0))
+        return 1;
+    }
+  }
+  // check for indirects, and then search those
+  return 0;
 }
+
+
+
+//Returns direntry of path
+// if it can't be found, returns a direntry with an invalid block
+static direntry findFile(const char *path){
+  // for now, assuming root
+  if (root_loaded == 0){
+    findPath("/");
+  }
+
+  char *filename;
+  filename = path++;
+
+  char tmp[BLOCKSIZE];
+
+  dirent contents;
+  // for all the dirent blocks
+  for (int i = 0; i < 116; i++){
+    // load the ith dirent block
+    dread(root.direct[i].block,tmp);
+    memcpy(contents, tmp, sizeof(dirent));
+    // for each entry in the dirent block
+    for (int j = 0; j < 64; j++) {
+      // continue if entry is invalid
+      if (contents.entries[j].block.valid == 0)
+        continue;
+      // compare the name
+      if (strcmp(filename, contents.entries[j].name) == 0){
+        // we found it! return the direntry
+        return contents.entries[j];
+      }
+    }
+  }
+  // check for indirects, and then search those
+
+  direntry invalid;
+  invalid.block.valid |= 0;
+  return invalid;
+}
+
 
 
 
@@ -272,7 +305,7 @@ static blocknum startFindPath(direntry startingDir, const char *path)
   strncpy(targetDir, path, firstSlash-path);
   targetDir[(firstSlash-path)] = '\0';
 
-  for(i = 0; i < 119; i++)
+  for(i = 0; i < 116; i++)
   {
     //If the block isn't valid, jump
     if(dirMeta.direct[i].valid == 0) continue;
@@ -299,14 +332,14 @@ static blocknum startFindPath(direntry startingDir, const char *path)
 //Returns blocknum pointing to DNODE of path
 static blocknum findPath(const char *path)
 {
-  direntry rootDir;
   char tmp[BLOCKSIZE];
 
   memset(tmp, 0, BLOCKSIZE);
   dread(the_vcb.root.block, tmp);
-  memcpy(&rootDir, tmp, sizeof(direntry));
+  memcpy(&root, tmp, sizeof(direntry));
+  root_loaded = 1;
 
-  return startFindPath(rootDir, path);
+  return startFindPath(root, path);
 }
 
 /*
@@ -367,7 +400,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   int i;
   blocknum invalidBlock;
   invalidBlock.valid = 0;
-  for(i = 0; i < 119; i++)
+  for(i = 0; i < 116; i++)
   {
     if(dirNode.direct[i].valid == 0)
     {
@@ -378,6 +411,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
 
   //Did we find any invalid entries? 
   if(invalidBlock.valid == 0)
+    // here, start with indirects
     return -3;
 
   invalidBlock.block = firstFree.block;
