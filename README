@@ -1,36 +1,14 @@
-You should use the 'make' command to build your filesystem executable
-and the formatting program.  We have provided skeleton code in
-3600fs.c and 3600mkfs.c to get you started.  You will need to fill
-in the stub code as specified by the assignment.
+Team Serendipity presents Cory And gaiL's File System (CALFS).
 
-In brief, you should first compile everything by running
+Inode is a file system that makes use of meta-information so that it is extremely flexible.
 
-make
+We chose Inode as our disk layout for many reasons.
+1) It doesn't take up a fixed amount of room on the disk
+2) It makes more sense to us to have the file metadata store the
+directory entries.
+3) It makes the extra credit much much easier.
+4) One of the team members thinks FAT is very silly, and that Inode
+makes much more sense to her.
 
-You should then create your disk by running
-
-./3600mkfs <disksize>
-
-(of course, this doesn't do anything right now except create a zero-ed out
-disk, but you'll add code to 3600mkfs.c to make it write out the data structures
-that your filesystem will use).  Finally, you'll attach your disk to the
-real filesystem by running
-
-./3600fs -d fuse-dir
-
-This will make your disk appear mounted at the local fuse-dir directory (the
-actual directory and its contents will be hidden as long as your process
-is running).  Any file operations (create/delete files, read/write data will
-be redirected to the various vfs_ functions in your 3600fs.c file).
-
-Note that you should pass in the '-d' flag to your FUSE executable to
-produce debugging output that will help you understand what's going on.
-If you do so, however, your program will NOT go into daemon mode, so you
-will need to use another terminal to exercise the directory.  Your
-executable will exit when you unmount the file system.
-
-We are using FUSE version 2.6. This is important to know because
-different FUSE versions have slightly different interfaces.
-
-You will find a great deal of resources about FUSE on the Web.  Please
-use Piazza to ask questions if you're stuck.
+Inode implementation details subject to change before the final
+version of the project.
