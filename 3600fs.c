@@ -306,7 +306,7 @@ static direntry findFile(const char *path){
 
 
 
-
+/*
 //Returns blocknum pointing to DNODE of path within startingDir
 static blocknum startFindPath(direntry startingDir, const char *path)
 {
@@ -365,6 +365,7 @@ static blocknum startFindPath(direntry startingDir, const char *path)
   return nonExistant;
 }
 
+*/
 // loads root to memory if not already loaded
 static void load_root(){
   if (root_loaded) return;
@@ -376,6 +377,7 @@ static void load_root(){
   fprintf(stderr, "root loaded!\n");
   return;
 }
+/*
 
 //Returns blocknum pointing to DNODE of path
 static blocknum findPath(const char *path)
@@ -390,6 +392,7 @@ static blocknum findPath(const char *path)
 
 }
 
+*/
 /*
  * Given an absolute path to a file (for example /a/b/myFile), vfs_create 
  * will create a new file named myFile in the /a/b directory.
@@ -398,113 +401,93 @@ static blocknum findPath(const char *path)
  *
  */
 static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
-  char *lastSlash = strrchr(path, '/');
-  if(lastSlash == NULL) lastSlash = path;
-  char tmp[BLOCKSIZE];
+  direntry existing_file = findFile(path);
 
-  //Is there any free space?
-  if(the_vcb.free.valid == 0)
-    return -1;
-
-  //is the filename too long?
-  if(strlen(lastSlash+1) >= 59)
-    return -2;
-
-  //Find the first free blocks and put something in them
-  blocknum firstFree = the_vcb.free;
-  freeblock firstFreeBlock;
-
-  memset(tmp, 0, BLOCKSIZE);
-  dread(firstFree.block, tmp);
-  memcpy(&firstFreeBlock, tmp, sizeof(freeblock));
-
-  blocknum secondFree = firstFreeBlock.next;
-  freeblock secondFreeBlock;
-
-  memset(tmp, 0, BLOCKSIZE);
-  dread(secondFree.block, tmp);
-  memcpy(&secondFreeBlock, tmp, sizeof(freeblock));
-
-  the_vcb.free = secondFreeBlock.next;
-
-  //What directory is this file in?
-  char targetDir[(lastSlash-path)+1];
-  strncpy(targetDir, path, lastSlash-path);
-  targetDir[(lastSlash-path)] = '\0';
-
-  //Pull the directory into memory. Checking for errors
-  blocknum dirBlock = findPath(targetDir);
-  if(dirBlock.valid == 0 || dirBlock.block == -1 || dirBlock.block == -2)
-    return -2;
-
-
-  dnode dirNode;
-
-  memset(tmp, 0, BLOCKSIZE);
-  dread(dirBlock.block, tmp);
-  memcpy(&dirNode, tmp, sizeof(dnode));
-
-  //Find the first invalid entry
-  int i;
-  blocknum invalidBlock;
-  invalidBlock.valid = 0;
-  for(i = 0; i < 116; i++)
-  {
-    if(dirNode.direct[i].valid == 0)
-    {
-      invalidBlock.valid |= 1;
-      break;
-    }
+  // if the file already exists, return the expected error
+  if(existing_file.block.valid) {
+    return -EEXIST;
   }
 
-  //Did we find any invalid entries? 
-  if(invalidBlock.valid == 0)
-    // here, start with indirects
-    return -3;
+  // assuming root, for now
+  load_root();
 
-  invalidBlock.block = firstFree.block;
-  invalidBlock.valid |= 1;
-  dirNode.direct[i] = invalidBlock;
+  char *filename;
+  filename = path ++;
 
+  // assuming permissions
+  // assuming filename of a reasonable length
+  // assuming room
 
-  //Create new directory entry
-  direntry newEntry;
-  strncpy(newEntry.name, lastSlash+1, strlen(lastSlash+1));
-  newEntry.type = 1;
-  newEntry.block = secondFree;
+  // make the inode
+  inode newfile;
+  struct timespec mytime;
+  clock_gettime(CLOCK_REALTIME, &mytime);
+  newfile.access_time = mytime;
+  newfile.create_time = mytime;
+  newfile.modify_time = mytime;
+  newfile.size = 0;
+  newfile.user = getuid();
+  newfile.group = getgid();
+  newfile.mode = mode;
 
-  //Create new file inode
-  inode newNode;
-  struct timespec currTime;
-  clock_gettime(CLOCK_REALTIME, &currTime);
-  newNode.size = BLOCKSIZE;
-  newNode.user = getuid();
-  newNode.group = getgid();
-  newNode.mode = mode;
-  newNode.access_time = currTime;
-  newNode.modify_time = currTime;
-  newNode.create_time = currTime;
+  for (int i = 0; i < 116; i++){
+    newfile.direct[i].valid &= 0;
+  }
+  newfile.single_indirect.valid &= 0;
+  newfile.double_indirect.valid &= 0;
 
-  //Write everything to disk
+  // find a free block for the inode
+  blocknum target = the_vcb.free;
 
+  // write the address of the next free block to the vcb
+  char tmp[BLOCKSIZE];
   memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &newNode, sizeof(inode));
-
-  dwrite(secondFree.block, tmp);
-
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &newEntry, sizeof(direntry));
-  dwrite(firstFree.block, tmp);
-
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &dirNode, sizeof(dnode));
-  dwrite(dirBlock.block, tmp);
-
+  dread(target.block, tmp);
+  freeblock oldfree;
+  memcpy(&oldfree, tmp, sizeof(freeblock));
+  the_vcb.free = oldfree.next;
   memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &the_vcb, sizeof(vcb));
   dwrite(0, tmp);
+  
 
-  return 0;
+  // write the inode to the disk
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &newfile, sizeof(inode));
+  dwrite(target.block, tmp);
+
+  // make the direntry
+  direntry newde;
+  newde.block = target;
+  newde.type = 'f';
+  strcpy(newde.name, filename);
+
+  // find an empty direct space
+  dirent partial;
+  for (int i = 0; i < 116; i ++){
+    if (root.direct[i].valid == 0){
+      // TODO capture the first one for future usage?
+      continue;
+    }
+    memset(tmp,0,BLOCKSIZE);
+    dread(root.direct[i].block, tmp);
+    memcpy(&partial, tmp, sizeof(dirent));
+    for (int j = 0; j < 64; j++) {
+      // if it's full, skip it
+      if(partial.entries[j].block.valid) {
+        continue;
+      }
+      partial.entries[j] = newde;
+      memset(tmp,0,BLOCKSIZE);
+      memcpy(tmp, &partial, sizeof(dirent));
+      dwrite(root.direct[i].block, tmp);
+      return 0;
+    }
+  }
+  // TODO assign indirects if necessary
+
+  // error
+  return -1;
 }
 
 /*
@@ -523,8 +506,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
 static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
-
-    return 0;
+  return 0;
 }
 
 /*
@@ -554,77 +536,6 @@ static int vfs_write(const char *path, const char *buf, size_t size,
  */
 static int vfs_delete(const char *path)
 {
-  char *lastSlash = strrchr(path, '/');
-  if(lastSlash == NULL) lastSlash = path;
-  char tmp[BLOCKSIZE];
-
-  /* 3600: NOTE THAT THE BLOCKS CORRESPONDING TO THE FILE SHOULD BE MARKED
-           AS FREE, AND YOU SHOULD MAKE THEM AVAILABLE TO BE USED WITH OTHER FILES */
-
-  //What directory is this file in?
-  char targetDir[(lastSlash-path)+1];
-  strncpy(targetDir, path, lastSlash-path);
-  targetDir[(lastSlash-path)] = '\0';
-
-
-  blocknum dirBlock = findPath(targetDir);
-
-  //Was there an error finding the directory?
-  if(dirBlock.valid == 0 || dirBlock.block == -1 || dirBlock.block == -2)
-    return -2;
-
-  //Load directory into memory
-  dnode dirNode;
-  blocknum oldBlock;
-
-  memset(tmp, 0, BLOCKSIZE);
-  dread(dirBlock.block, tmp);
-  memcpy(&dirNode, tmp, sizeof(dnode));
-  int i;
-
-  for(i = 0; i < 119; i++)
-  {
-    //If the block isn't valid, jump
-    if(dirNode.direct[i].valid == 0) continue;
-
-    //If the names match traverse
-    direntry myDir;
-
-    memset(tmp, 0, BLOCKSIZE);
-    dread(dirNode.direct[i].block, tmp);
-    memcpy(&myDir, tmp, sizeof(direntry));
-
-    if(strcmp(myDir.name, lastSlash+1) == 0)
-    {
-      oldBlock = dirNode.direct[i];
-      dirNode.direct[i].valid = 0;
-      break;
-    }
-
-  }
-
-  //Make a free block to replace inode. Add to free block list
-  freeblock myFree;
-  myFree.next = the_vcb.free;
-
-  the_vcb.free = oldBlock;
-
-  //Write new stuff to disk
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &myFree, sizeof(freeblock));
-
-  dwrite(oldBlock.block, tmp);
-
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &dirNode, sizeof(dnode));
-  dwrite(dirBlock.block, tmp);
-
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &the_vcb, sizeof(vcb));
-  dwrite(0, tmp);
-
-
-
 
   return 0;
 }

@@ -10,9 +10,8 @@
 
 static int getattr_from_direntry(direntry target_d, struct stat *stbuf);
 static direntry findFile(const char *path);
-static blocknum startFindPath(direntry startingDir, const char *path);
-static blocknum findPath(const char *path);
+//static blocknum startFindPath(direntry startingDir, const char *path);
+//static blocknum findPath(const char *path);
 static void load_root();
-
 
 #endif
