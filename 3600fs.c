@@ -33,7 +33,7 @@
 #include "inode.h"
 
 vcb the_vcb;
-direntry root;
+dnode root;
 int root_loaded = 0;
 
 /*
@@ -137,7 +137,7 @@ static int getattr_from_direntry(direntry target_d, struct stat *stbuf){
   // read the block
   char tmp[BLOCKSIZE];
   dread(target_d.block.block, tmp);
-  memcpy(target,tmp, sizeof(inode));
+  memcpy(&target,tmp,sizeof(inode));
 
   if (target_d.type == 'd'){
     stbuf->st_mode = 0777 | S_IFDIR;
@@ -153,6 +153,8 @@ static int getattr_from_direntry(direntry target_d, struct stat *stbuf){
   stbuf->st_size    = target.size;
   stbuf->st_blocks  = target.size / BLOCKSIZE;
   if(target.size % BLOCKSIZE != 0) stbuf->st_blocks += 1;
+
+  return 0;
 }
 
 
@@ -198,9 +200,7 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
                        off_t offset, struct fuse_file_info *fi)
 {
   // for now, assume root
-  if(root_loaded == 0){
-    findPath("/");
-  }
+  load_root();
   
   char tmp[BLOCKSIZE];
 
@@ -210,7 +210,7 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
   for (int i = 0; i < 116; i++){
     // load the ith dirent block
     dread(root.direct[i].block,tmp);
-    memcpy(contents, tmp, sizeof(dirent));
+    memcpy(&contents, tmp, sizeof(dirent));
     // for each entry in the dirent block
     for (int j = 0; j < 64; j++) {
       // continue if entry is invalid
@@ -219,7 +219,7 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       // add to the list
       struct stat stbuf;
       getattr_from_direntry(contents.entries[j], &stbuf);
-      if(filler(buf, contents.entries[j].name, stbuf, 0))
+      if(filler(buf, contents.entries[j].name, &stbuf, 0))
         return 1;
     }
   }
@@ -233,9 +233,7 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 // if it can't be found, returns a direntry with an invalid block
 static direntry findFile(const char *path){
   // for now, assuming root
-  if (root_loaded == 0){
-    findPath("/");
-  }
+  load_root();
 
   char *filename;
   filename = path++;
@@ -247,7 +245,7 @@ static direntry findFile(const char *path){
   for (int i = 0; i < 116; i++){
     // load the ith dirent block
     dread(root.direct[i].block,tmp);
-    memcpy(contents, tmp, sizeof(dirent));
+    memcpy(&contents, tmp, sizeof(dirent));
     // for each entry in the dirent block
     for (int j = 0; j < 64; j++) {
       // continue if entry is invalid
@@ -260,7 +258,7 @@ static direntry findFile(const char *path){
       }
     }
   }
-  // check for indirects, and then search those
+  // TODO check for indirects, and then search those
 
   direntry invalid;
   invalid.block.valid |= 0;
@@ -328,18 +326,27 @@ static blocknum startFindPath(direntry startingDir, const char *path)
   return nonExistant;
 }
 
+// loads root to memory if not already loaded
+static void load_root(){
+  if (root_loaded) return;
+  char tmp[BLOCKSIZE];
+  dread(the_vcb.root.block, tmp);
+  memcpy(&root, tmp, sizeof(dnode));
+  root_loaded = 1;
+  return;
+}
 
 //Returns blocknum pointing to DNODE of path
 static blocknum findPath(const char *path)
 {
+  direntry rootDir;
   char tmp[BLOCKSIZE];
-
+    
   memset(tmp, 0, BLOCKSIZE);
-  dread(the_vcb.root.block, tmp);
-  memcpy(&root, tmp, sizeof(direntry));
-  root_loaded = 1;
+  memcpy(&rootDir, tmp, sizeof(direntry));
+          
+  return startFindPath(rootDir, path);
 
-  return startFindPath(root, path);
 }
 
 /*
