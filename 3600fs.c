@@ -274,14 +274,14 @@ static direntry findFile(const char *path){
   // for all the dirent blocks
   for (int i = 0; i < 116; i++){
     if(root.direct[i].valid == 0) {
-      fprintf(stderr, "direct %d is invalid\n", i);
+//      fprintf(stderr, "direct %d is invalid\n", i);
       continue;
     }
     // load the ith dirent block
     memset(tmp, 0, BLOCKSIZE);
     dread(root.direct[i].block,tmp);
     memcpy(&contents, tmp, sizeof(dirent));
-    fprintf(stderr, "dirent %d loaded\n", i);
+//    fprintf(stderr, "dirent %d loaded\n", i);
     // for each entry in the dirent block
     for (int j = 0; j < 64; j++) {
       // continue if entry is invalid
@@ -392,6 +392,25 @@ static blocknum findPath(const char *path)
 }
 
 */
+
+// gets the next free block from the vcb
+// sets the vcb's free block to the subsequent one
+static blocknum get_next_free_block(){
+  blocknum target = the_vcb.free;
+
+  // write the address of the next free block to the vcb
+  char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
+  dread(target.block, tmp);
+  freeblock oldfree;
+  memcpy(&oldfree, tmp, sizeof(freeblock));
+  the_vcb.free = oldfree.next;
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &the_vcb, sizeof(vcb));
+  dwrite(0, tmp);
+
+  return target;
+}
 /*
  * Given an absolute path to a file (for example /a/b/myFile), vfs_create 
  * will create a new file named myFile in the /a/b directory.
@@ -434,22 +453,10 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   newfile.single_indirect.valid &= 0;
   newfile.double_indirect.valid &= 0;
 
-  // find a free block for the inode
-  blocknum target = the_vcb.free;
-
-  // write the address of the next free block to the vcb
-  char tmp[BLOCKSIZE];
-  memset(tmp, 0, BLOCKSIZE);
-  dread(target.block, tmp);
-  freeblock oldfree;
-  memcpy(&oldfree, tmp, sizeof(freeblock));
-  the_vcb.free = oldfree.next;
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &the_vcb, sizeof(vcb));
-  dwrite(0, tmp);
-  
+  blocknum target = get_next_free_block();
 
   // write the inode to the disk
+  char tmp[BLOCKSIZE];
   memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &newfile, sizeof(inode));
   dwrite(target.block, tmp);
@@ -461,10 +468,13 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   strcpy(newde.name, filename);
 
   // find an empty direct space
+  int first_invalid = -1;
   dirent partial;
   for (int i = 0; i < 116; i ++){
     if (root.direct[i].valid == 0){
-      // TODO capture the first one for future usage?
+      if (first_invalid == -1){
+        first_invalid = i;
+      }
       continue;
     }
     memset(tmp,0,BLOCKSIZE);
@@ -482,7 +492,33 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
       return 0;
     }
   }
-  // TODO assign indirects if necessary
+  // if no partials were found, make a new dirent with the entry
+  dirent newdirent;
+  newdirent.entries[0] = newde;
+  for (int i = 1; i < 64; i++){
+    newdirent.entries[i].block.valid &= 0;
+  }
+  // get the next free block for the dirent
+  // optimization opportunity - write all changes to vcb at once
+  blocknum dirent_target = get_next_free_block();
+
+  // write the dirent to the new block
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &newdirent, sizeof(dirent));
+  dwrite(dirent_target.block, tmp);
+
+  // point root's dirent toward the new dirent block
+  if (first_invalid == -1){
+    // TODO assign indirect here
+    //for now
+    return -1;
+  }
+  root.direct[first_invalid] = dirent_target;
+  
+  // write to root
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &root, sizeof(dnode));
+  dwrite(the_vcb.root.block, tmp);
 
   // error
   return -1;
