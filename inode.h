@@ -35,12 +35,12 @@ typedef struct dnode_t {
   uid_t user;
   gid_t group;
   mode_t mode;
-  time_t access_time;
-  time_t modify_time;
-  time_t create_time;
+  struct timespec access_time;
+  struct timespec modify_time;
+  struct timespec create_time;
 
-  // 512 - 9 * 4 = 476 / 4 = 119
-  blocknum direct[119];
+  // 512 - 12 * 4 = 464 / 4 = 116
+  blocknum direct[116];
   blocknum single_indirect;
   blocknum double_indirect;
 } dnode;
@@ -64,11 +64,11 @@ typedef struct inode_t {
   uid_t user;
   gid_t group;
   mode_t mode;
-  time_t access_time;
-  time_t modify_time;
-  time_t create_time;
+  struct timespec access_time;
+  struct timespec modify_time;
+  struct timespec create_time;
 
-  blocknum direct[119];
+  blocknum direct[116];
   blocknum single_indirect;
   blocknum double_indirect;
 } inode;
