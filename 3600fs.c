@@ -266,8 +266,7 @@ static direntry findFile(const char *path){
   // for now, assuming root
   load_root();
 
-  char *filename;
-  filename = path++;
+  const char *filename = path + 1;
 
   char tmp[BLOCKSIZE];
 
@@ -411,8 +410,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   // assuming root, for now
   load_root();
 
-  char *filename;
-  filename = path ++;
+  const char *filename = path + 1;
 
   // assuming permissions
   // assuming filename of a reasonable length
@@ -536,6 +534,93 @@ static int vfs_write(const char *path, const char *buf, size_t size,
  */
 static int vfs_delete(const char *path)
 {
+  // for now, assuming root
+  load_root();
+  
+  const char *filename = path + 1;
+
+  blocknum target_block;
+  int found = 0;
+
+  char tmp[BLOCKSIZE];
+
+  dirent contents;
+  // for all the dirent blocks
+  for (int i = 0; i < 116; i++){
+    if(root.direct[i].valid == 0) {
+      fprintf(stderr, "direct %d is invalid\n", i);
+      continue;
+    }
+    // load the ith dirent block
+    memset(tmp, 0, BLOCKSIZE);
+    dread(root.direct[i].block,tmp);
+    memcpy(&contents, tmp, sizeof(dirent));
+    fprintf(stderr, "dirent %d loaded\n", i);
+    // for each entry in the dirent block
+    for (int j = 0; j < 64; j++) {
+      // continue if entry is invalid
+      if (contents.entries[j].block.valid == 0) {
+        //fprintf(stderr, "entry %d in dirent %d is invalid.\n", j ,i);
+        continue;
+      }
+      // compare the name
+      if (strcmp(filename, contents.entries[j].name) == 0){
+        // make sure the file is a file
+        if(contents.entries[j].type != 'f') {
+          return -1;
+        }
+        // remember the direntry
+        target_block = contents.entries[j].block;
+        // set entry invalid
+        contents.entries[j].block.valid &= 0;
+        // set found flag for quicker exit
+        found = 1;
+        break;
+      }
+    }
+    // write dirent and quick exit
+    if (found) {
+      memset(tmp, 0, BLOCKSIZE);
+      memcpy(tmp, &contents, sizeof(dirent));
+      dwrite(root.direct[i].block, tmp);
+      break;
+    }
+  }
+
+  // if the file doesn't exist
+  if (found == 0) {
+    return -1;
+  }
+
+
+  /* TODO check for datablocks used by file, remove those
+  inode target;
+  char tmp[BLOCKSIZE];
+  memset(tmp, 0, BLOCKSIZE);
+  dread(target_block.block, tmp);
+  memcpy(&target, tmp, sizeof(inode));
+
+  */
+
+  // make a freeblock pointing to the current freeblock
+  // write it over the inode
+  freeblock newfree;
+  newfree.next = the_vcb.free;
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &newfree, sizeof(freeblock));
+  dwrite(target_block.block, tmp);
+  
+  // unsure if this line is necessary
+  // don't know if setting the address to invalid above changes target_block
+  // better safe than sorry
+  target_block.valid |= 1;
+
+  // point the_vcb.free to the new freeblock
+  // write it
+  the_vcb.free = target_block;
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &the_vcb, sizeof(vcb));
+  dwrite(0, tmp);
 
   return 0;
 }
