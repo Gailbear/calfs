@@ -56,7 +56,7 @@ typedef struct direntry_t {
 } direntry;
 
 typedef struct dirent_t {
-  direntry entries[64];
+  direntry entries[8];
 } dirent;
 
 typedef struct inode_t {

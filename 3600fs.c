@@ -141,8 +141,6 @@ static int vfs_getattr(const char *path, struct stat *stbuf) {
   
   direntry target_d = findFile(path);
 
-  fprintf(stderr, "target acquired!\n");
-  
   // if the file wasn't found, throw the expected error
   if (target_d.block.valid == 0) return -ENOENT; 
 
@@ -238,19 +236,19 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
     memset(tmp, 0, BLOCKSIZE);
     dread(root.direct[i].block,tmp);
     memcpy(&contents, tmp, sizeof(dirent));
-    //fprintf(stderr, "dirent %d loaded\n", i);
+    fprintf(stderr, "dirent %d loaded\n", i);
     // for each entry in the dirent block
-    for (int j = 0; j < 64; j++) {
+    for (int j = 0; j < 8; j++) {
       // continue if entry is invalid
       if (contents.entries[j].block.valid == 0) {
         //fprintf(stderr, "entry %d in dirent %d is invalid.\n", j ,i);
         continue;
       }
       // add to the list
+      fprintf(stderr, "entry %d in dirent %d exists.\n", j, i);
       struct stat stbuf;
       getattr_from_direntry(contents.entries[j], &stbuf);
-      if(filler(buf, contents.entries[j].name, &stbuf, 0))
-        return 1;
+      filler(buf, contents.entries[j].name, &stbuf, 0);
     }
   }
   // check for indirects, and then search those
@@ -283,7 +281,7 @@ static direntry findFile(const char *path){
     memcpy(&contents, tmp, sizeof(dirent));
 //    fprintf(stderr, "dirent %d loaded\n", i);
     // for each entry in the dirent block
-    for (int j = 0; j < 64; j++) {
+    for (int j = 0; j < 8; j++) {
       // continue if entry is invalid
       if (contents.entries[j].block.valid == 0) {
         //fprintf(stderr, "entry %d in dirent %d is invalid.\n", j ,i);
@@ -299,7 +297,7 @@ static direntry findFile(const char *path){
   // TODO check for indirects, and then search those
 
   direntry invalid;
-  invalid.block.valid |= 0;
+  invalid.block.valid &= 0;
   return invalid;
 }
 
@@ -396,6 +394,7 @@ static blocknum findPath(const char *path)
 // gets the next free block from the vcb
 // sets the vcb's free block to the subsequent one
 static blocknum get_next_free_block(){
+  fprintf(stderr, "get next free block called\n");
   blocknum target = the_vcb.free;
 
   // write the address of the next free block to the vcb
@@ -419,6 +418,9 @@ static blocknum get_next_free_block(){
  *
  */
 static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+  fprintf(stderr, "vfs_create called with path %s\n", path);
+
+
   direntry existing_file = findFile(path);
 
   // if the file already exists, return the expected error
@@ -480,7 +482,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
     memset(tmp,0,BLOCKSIZE);
     dread(root.direct[i].block, tmp);
     memcpy(&partial, tmp, sizeof(dirent));
-    for (int j = 0; j < 64; j++) {
+    for (int j = 0; j < 8; j++) {
       // if it's full, skip it
       if(partial.entries[j].block.valid) {
         continue;
@@ -495,7 +497,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   // if no partials were found, make a new dirent with the entry
   dirent newdirent;
   newdirent.entries[0] = newde;
-  for (int i = 1; i < 64; i++){
+  for (int i = 1; i < 8; i++){
     newdirent.entries[i].block.valid &= 0;
   }
   // get the next free block for the dirent
@@ -593,7 +595,7 @@ static int vfs_delete(const char *path)
     memcpy(&contents, tmp, sizeof(dirent));
     fprintf(stderr, "dirent %d loaded\n", i);
     // for each entry in the dirent block
-    for (int j = 0; j < 64; j++) {
+    for (int j = 0; j < 8; j++) {
       // continue if entry is invalid
       if (contents.entries[j].block.valid == 0) {
         //fprintf(stderr, "entry %d in dirent %d is invalid.\n", j ,i);
