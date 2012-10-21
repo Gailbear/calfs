@@ -224,7 +224,7 @@ static int vfs_mkdir(const char *path, mode_t mode) {
  * @return 1 if buffer is full, zero otherwise
  * typedef int (*fuse_fill_dir_t) (void *buf, const char *name,
  *                                 const struct stat *stbuf, off_t off);
- *			   
+ *         
  * Your solution should not need to touch offset and fi
  *
  */
@@ -241,6 +241,7 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
 static blocknum startFindPath(direntry startingDir, const char *path)
 {
   dnode dirMeta;
+  char tmp[BLOCKSIZE];
 
   //Get rid of absolute path
   if(*path == '/') path++;
@@ -250,8 +251,9 @@ static blocknum startFindPath(direntry startingDir, const char *path)
     return startingDir.block;
 
   //If not in the correct directory, get meta data
-  dread(startingDir.block.block, (char *)&dirMeta);
-
+  memset(tmp, 0, BLOCKSIZE);
+  dread(startingDir.block.block, tmp);
+  memcpy(&dirMeta, tmp, sizeof(dnode));
   //If permissions don't match up, kick em out.
   if(dirMeta.user != getuid() && dirMeta.group != getgid())
   {
@@ -277,7 +279,10 @@ static blocknum startFindPath(direntry startingDir, const char *path)
 
     //If the names match traverse
     direntry myDir;
-    dread(dirMeta.direct[i].block, (char *)&myDir);
+
+    memset(tmp, 0, BLOCKSIZE);
+    dread(dirMeta.direct[i].block, tmp);
+    memcpy(&myDir, tmp, sizeof(direntry));
 
     if(strcmp(myDir.name, targetDir) == 0)
         return startFindPath(myDir, firstSlash);
@@ -295,7 +300,12 @@ static blocknum startFindPath(direntry startingDir, const char *path)
 static blocknum findPath(const char *path)
 {
   direntry rootDir;
-  dread(the_vcb.root.block, (char *)&rootDir);
+  char tmp[BLOCKSIZE];
+
+  memset(tmp, 0, BLOCKSIZE);
+  dread(the_vcb.root.block, tmp);
+  memcpy(&rootDir, tmp, sizeof(direntry));
+
   return startFindPath(rootDir, path);
 }
 
@@ -308,6 +318,8 @@ static blocknum findPath(const char *path)
  */
 static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
   char *lastSlash = strrchr(path, '/');
+  if(lastSlash == NULL) lastSlash = path;
+  char tmp[BLOCKSIZE];
 
   //Is there any free space?
   if(the_vcb.free.valid == 0)
@@ -321,12 +333,16 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   blocknum firstFree = the_vcb.free;
   freeblock firstFreeBlock;
 
-  dread(firstFree.block, (char *)&firstFreeBlock);
+  memset(tmp, 0, BLOCKSIZE);
+  dread(firstFree.block, tmp);
+  memcpy(&firstFreeBlock, tmp, sizeof(freeblock));
 
   blocknum secondFree = firstFreeBlock.next;
   freeblock secondFreeBlock;
 
-  dread(secondFree.block, (char *)&secondFreeBlock);
+  memset(tmp, 0, BLOCKSIZE);
+  dread(secondFree.block, tmp);
+  memcpy(&secondFreeBlock, tmp, sizeof(freeblock));
 
   the_vcb.free = secondFreeBlock.next;
 
@@ -342,7 +358,10 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
 
 
   dnode dirNode;
-  dread(dirBlock.block, (char *)&dirNode);
+
+  memset(tmp, 0, BLOCKSIZE);
+  dread(dirBlock.block, tmp);
+  memcpy(&dirNode, tmp, sizeof(dnode));
 
   //Find the first invalid entry
   int i;
@@ -374,7 +393,8 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
 
   //Create new file inode
   inode newNode;
-  time_t currTime = time(NULL);
+  struct timespec currTime;
+  clock_gettime(CLOCK_REALTIME, &currTime);
   newNode.size = BLOCKSIZE;
   newNode.user = getuid();
   newNode.group = getgid();
@@ -384,7 +404,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   newNode.create_time = currTime;
 
   //Write everything to disk
-  char tmp[BLOCKSIZE];
+
   memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &newNode, sizeof(inode));
 
@@ -453,6 +473,8 @@ static int vfs_write(const char *path, const char *buf, size_t size,
 static int vfs_delete(const char *path)
 {
   char *lastSlash = strrchr(path, '/');
+  if(lastSlash == NULL) lastSlash = path;
+  char tmp[BLOCKSIZE];
 
   /* 3600: NOTE THAT THE BLOCKS CORRESPONDING TO THE FILE SHOULD BE MARKED
            AS FREE, AND YOU SHOULD MAKE THEM AVAILABLE TO BE USED WITH OTHER FILES */
@@ -472,7 +494,10 @@ static int vfs_delete(const char *path)
   //Load directory into memory
   dnode dirNode;
   blocknum oldBlock;
-  dread(dirBlock.block, (char *)&dirNode);
+
+  memset(tmp, 0, BLOCKSIZE);
+  dread(dirBlock.block, tmp);
+  memcpy(&dirNode, tmp, sizeof(dnode));
   int i;
 
   for(i = 0; i < 119; i++)
@@ -482,7 +507,10 @@ static int vfs_delete(const char *path)
 
     //If the names match traverse
     direntry myDir;
-    dread(dirNode.direct[i].block, (char *)&myDir);
+
+    memset(tmp, 0, BLOCKSIZE);
+    dread(dirNode.direct[i].block, tmp);
+    memcpy(&myDir, tmp, sizeof(direntry));
 
     if(strcmp(myDir.name, lastSlash+1) == 0)
     {
@@ -500,7 +528,6 @@ static int vfs_delete(const char *path)
   the_vcb.free = oldBlock;
 
   //Write new stuff to disk
-  char tmp[BLOCKSIZE];
   memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &myFree, sizeof(freeblock));
 
@@ -591,22 +618,22 @@ static int vfs_truncate(const char *file, off_t offset)
  * NOTE: If you're supporting multiple directories for extra credit,
  * you should add 
  *
- *     .mkdir	 = vfs_mkdir,
+ *     .mkdir  = vfs_mkdir,
  */
 static struct fuse_operations vfs_oper = {
     .init    = vfs_mount,
     .destroy = vfs_unmount,
     .getattr = vfs_getattr,
     .readdir = vfs_readdir,
-    .create	 = vfs_create,
-    .read	 = vfs_read,
-    .write	 = vfs_write,
-    .unlink	 = vfs_delete,
-    .rename	 = vfs_rename,
-    .chmod	 = vfs_chmod,
-    .chown	 = vfs_chown,
-    .utimens	 = vfs_utimens,
-    .truncate	 = vfs_truncate,
+    .create  = vfs_create,
+    .read  = vfs_read,
+    .write   = vfs_write,
+    .unlink  = vfs_delete,
+    .rename  = vfs_rename,
+    .chmod   = vfs_chmod,
+    .chown   = vfs_chown,
+    .utimens   = vfs_utimens,
+    .truncate  = vfs_truncate,
 };
 
 int main(int argc, char *argv[]) {
