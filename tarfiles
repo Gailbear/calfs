@@ -1,0 +1,9 @@
+3600fs.c
+3600fs.h
+3600mkfs.c
+inode.h
+disk.c
+disk.h
+Makefile
+test
+README
