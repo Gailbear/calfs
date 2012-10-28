@@ -686,10 +686,32 @@ static int vfs_rename(const char *from, const char *to)
  * fcb->mode = (mode & 0x0000ffff);
  *
  */
+
 static int vfs_chmod(const char *file, mode_t mode)
 {
+  //find the block
+  direntry target_d = findFile(file);
 
-    return 0;
+  //handle broken file here?
+
+  inode target;
+  char tmp[BLOCKSIZE];
+
+
+  // read the block
+  memset(tmp, 0, BLOCKSIZE);
+  dread(target_d.block.block, tmp);
+  memcpy(&target,tmp,sizeof(inode));
+
+  // change the block's mode
+  target.mode = (mode & 0x0000ffff);
+
+  // write the block back to disk
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &target, sizeof(inode));
+  dwrite(target_d.block.block, tmp);
+
+  return 0;
 }
 
 /*
@@ -699,8 +721,30 @@ static int vfs_chmod(const char *file, mode_t mode)
  */
 static int vfs_chown(const char *file, uid_t uid, gid_t gid)
 {
+  //find the block
+  direntry target_d = findFile(file);
 
-    return 0;
+  //handle broken file here?
+
+  inode target;
+  char tmp[BLOCKSIZE];
+
+
+  // read the block
+  memset(tmp, 0, BLOCKSIZE);
+  dread(target_d.block.block, tmp);
+  memcpy(&target,tmp,sizeof(inode));
+
+  // change the block's mode
+  target.user = uid;
+  target.group = gid;
+
+  // write the block back to disk
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &target, sizeof(inode));
+  dwrite(target_d.block.block, tmp);
+
+  return 0;
 }
 
 /*
@@ -709,8 +753,30 @@ static int vfs_chown(const char *file, uid_t uid, gid_t gid)
  */
 static int vfs_utimens(const char *file, const struct timespec ts[2])
 {
+  //find the block
+  direntry target_d = findFile(file);
 
-    return 0;
+  //handle broken file here?
+
+  inode target;
+  char tmp[BLOCKSIZE];
+
+
+  // read the block
+  memset(tmp, 0, BLOCKSIZE);
+  dread(target_d.block.block, tmp);
+  memcpy(&target,tmp,sizeof(inode));
+
+  // change the block's mode
+  target.access_time = ts[0];
+  target.modify_time = ts[1];
+
+  // write the block back to disk
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &target, sizeof(inode));
+  dwrite(target_d.block.block, tmp);
+
+  return 0;
 }
 
 /*
