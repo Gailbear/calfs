@@ -249,8 +249,7 @@ static int vfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler,
       fprintf(stderr, "entry %d in dirent %d exists.\n", j, i);
       struct stat stbuf;
       getattr_from_direntry(contents.entries[j], &stbuf);
-      if (filler(buf, contents.entries[j].name, &stbuf, 0))
-        return -1;
+      filler(buf, contents.entries[j].name, &stbuf, 0);
     }
   }
 
@@ -280,8 +279,7 @@ static int readdir_indirect(blocknum block, void *buf, fuse_fill_dir_t filler, o
       if(contents.entries[j].block.valid){
         struct stat stbuf;
         getattr_from_direntry(contents.entries[j], &stbuf);
-        if (filler(buf, contents.entries[j].name, &stbuf, 0))
-        return -1;
+        filler(buf, contents.entries[j].name, &stbuf, 0);
       }
     }
   }
@@ -422,7 +420,7 @@ static blocknum startFindPath(direntry startingDir, const char *path)
   //If not in the correct directory, get meta data
   memset(tmp, 0, BLOCKSIZE);
   dread(startingDir.block.block, tmp);
-  memcpy(&dirMeta, tmp, sizeof(dnode));
+  memcpy(dirMeta, tmp, sizeof(dnode));
   //If permissions don't match up, kick em out.
   if(dirMeta.user != getuid() && dirMeta.group != getgid())
   {
@@ -515,7 +513,10 @@ static blocknum get_next_free_block(){
 
 // could be optimized
 static blocknum create_new_dirent(){
+  fprintf(stderr, "making a new dirent block.\n");
   blocknum target = get_next_free_block();
+  // to make sure
+  target.valid |= 1;
   dirent dnt;
   for(int i = 0; i < 8; i++){
     dnt.entries[i].block.valid &= 0;
@@ -529,54 +530,57 @@ static blocknum create_new_dirent(){
 
 
   // optimize this later
+  // want lambdas!
 static blocknum get_next_empty_dirent(int *entry) {
   char tmp[BLOCKSIZE];
 
   //for now, assume root
   load_root();
   // in the future, these will be passed into the function
-  dnode dir = root;
+  dnode *dir = &root;
   blocknum dir_block = the_vcb.root;
 
   dirent dnt;
   int first_free = -1;
   // first search for direct dirents
   for(int i = 0; i < 116; i++){
-    if(dir.direct[i].valid == 0) {
+    if((*dir).direct[i].valid == 0) {
       if(first_free == -1) first_free = i;
       continue;
     }
     memset(tmp,0, BLOCKSIZE);
-    dread(dir.direct[i].block, tmp);
+    dread((*dir).direct[i].block, tmp);
     memcpy(&dnt, tmp, sizeof(dirent));
     for (int j = 0; j < 8; j++){
       if(dnt.entries[j].block.valid) continue;
+      fprintf(stderr, "found a partial dirent block: %d\n", (*dir).direct[i].block);
       *entry = j;
-      return dir.direct[i];
+      return (*dir).direct[i];
     }
   }
   if (first_free != -1){
-    dir.direct[first_free] = create_new_dirent();
+    (*dir).direct[first_free] = create_new_dirent();
+    fprintf(stderr, "Made new dirent block: %d\n", (*dir).direct[first_free].block);
     // write updated dir to disk
     memset(tmp, 0, BLOCKSIZE);
-    memcpy(tmp, &dir, sizeof(dnode));
+    memcpy(tmp, dir, sizeof(dnode));
     dwrite(dir_block.block, tmp);
 
     // return the right information
     *entry = 0;
-    return dir.direct[first_free];
+    return (*dir).direct[first_free];
   }
 
   // if there is no single indirect
-  if (dir.single_indirect.valid == 0){
+  if ((*dir).single_indirect.valid == 0){
     // get free blocks
     blocknum single_target = get_next_free_block();
     blocknum newdnt_target = create_new_dirent();
 
     // update directory
-    dir.single_indirect = single_target;
+    (*dir).single_indirect = single_target;
     memset(tmp, 0, BLOCKSIZE);
-    memcpy(tmp, &dir, sizeof(dnode));
+    memcpy(tmp, dir, sizeof(dnode));
     dwrite(dir_block.block, tmp);
 
     // create single indirect
@@ -598,7 +602,7 @@ static blocknum get_next_empty_dirent(int *entry) {
   // load it
   indirect single;
   memset(tmp, 0, BLOCKSIZE);
-  dread(dir.single_indirect.block, tmp);
+  dread((*dir).single_indirect.block, tmp);
   memcpy(&single, tmp, sizeof(indirect));
 
   // check for free and partial dirents
@@ -622,22 +626,22 @@ static blocknum get_next_empty_dirent(int *entry) {
     single.blocks[first_free] = create_new_dirent();
     memset(tmp, 0, BLOCKSIZE);
     memcpy(&single, tmp, sizeof(indirect));
-    dwrite(dir.single_indirect.block, tmp);
+    dwrite((*dir).single_indirect.block, tmp);
     *entry = 0;
     return single.blocks[first_free];
   }
 
   // if there isn't a double indirect
-  if (dir.double_indirect.valid == 0){
+  if ((*dir).double_indirect.valid == 0){
     // get free blocks
     blocknum double_target = get_next_free_block();
     blocknum single_target = get_next_free_block();
     blocknum newdnt_target = create_new_dirent();
 
     // update directory
-    dir.double_indirect = double_target;
+    (*dir).double_indirect = double_target;
     memset(tmp, 0, BLOCKSIZE);
-    memcpy(tmp, &dir, sizeof(dnode));
+    memcpy(tmp, dir, sizeof(dnode));
     dwrite(dir_block.block, tmp);
 
     // create double indirect
@@ -669,7 +673,7 @@ static blocknum get_next_empty_dirent(int *entry) {
   // load it
   indirect dind;
   memset(tmp, 0, BLOCKSIZE);
-  dread(dir.double_indirect.block, tmp);
+  dread((*dir).double_indirect.block, tmp);
   memcpy(&dind, tmp, sizeof(indirect));
 
   int first_free_single = -1;
@@ -715,7 +719,7 @@ static blocknum get_next_empty_dirent(int *entry) {
     dind.blocks[first_free_single] = single_target;
     memset(tmp, 0, BLOCKSIZE);
     memcpy(tmp, &dind, sizeof(indirect));
-    dwrite(dir.double_indirect.block, tmp);
+    dwrite((*dir).double_indirect.block, tmp);
 
     // create single indirect
     single.blocks[0] = newdnt_target;
@@ -795,6 +799,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
   // make the direntry
   direntry newde;
   newde.block = target;
+  newde.block.valid |= 1;
   newde.type = 'f';
   strcpy(newde.name, filename);
 
@@ -804,19 +809,23 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
 
   if (dirent_target.valid == 0) {
     // there's no more room in the directory
+    fprintf(stderr, "No more room in directory.\n");
     return -1;
   }
 
   // load the dirent
+  fprintf(stderr, "loading dirent\n");
   dirent dnt;
   memset(tmp, 0, BLOCKSIZE);
   dread(dirent_target.block, tmp);
   memcpy(&dnt, tmp, sizeof(dirent));
   
   // modify the dirent
+  fprintf(stderr, "modifying dirent\n");
   dnt.entries[index] = newde;
 
   // write the dirent
+  fprintf(stderr, "saving dirent\n");
   memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &dnt, sizeof(dirent));
   dwrite(dirent_target.block, tmp);
