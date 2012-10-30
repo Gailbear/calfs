@@ -849,7 +849,55 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
 static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
-  return 0;
+  direntry target_direntry = findFile(path);
+
+  // check for valid
+  if(target_direntry.block.valid == 0)
+    return -1;
+
+  // check for file
+  if(target_direntry.type == 'd')
+    return -1;
+
+  // read the inode to target
+  inode target;
+  char tmp[BLOCKSIZE];
+  memset(tmp,0,BLOCKSIZE);
+  dread(target_direntry.block.block, tmp);
+  memcpy(&target, tmp, sizeof(inode));
+
+  // can't read the file if the offset is past the size of the file
+  if (offset > target.size) return -1;
+
+  int block_offset = offset/512;
+  int byte_offset = offset % 512;
+
+  int bytes_read = 0;
+
+  db loaded;
+  for(int i = block_offset; i < 116; i++){
+    if(target.direct[i].valid == 0) continue;
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.direct[i].block, tmp);
+    memcpy(&loaded, tmp, sizeof(db));
+    byte_offset = block_offset != i ? 0 : byte_offset;
+    int limit = size - bytes_read <= 512 ? size - bytes_read : 512;
+    for(int j = byte_offset; j < limit; j++){
+      buf[bytes_read] = loaded.data[j];
+      bytes_read ++;
+      if(loaded.data[j] == EOF){
+        return bytes_read;
+      }
+    }
+    if (size <= bytes_read)
+      return bytes_read;
+  }
+
+  // deal with indirects here
+
+// there was an error
+  return -1;
+
 }
 
 /*
@@ -870,7 +918,135 @@ static int vfs_write(const char *path, const char *buf, size_t size,
   /* 3600: NOTE THAT IF THE OFFSET+SIZE GOES OFF THE END OF THE FILE, YOU
            MAY HAVE TO EXTEND THE FILE (ALLOCATE MORE BLOCKS TO IT). */
 
-  return 0;
+  direntry target_direntry = findFile(path);
+
+  // check for valid
+  if(target_direntry.block.valid == 0)
+    return -1;
+
+  // check for file
+  if(target_direntry.type == 'd')
+    return -1;
+
+  // read the inode to target
+  inode target;
+  char tmp[BLOCKSIZE];
+  memset(tmp,0,BLOCKSIZE);
+  dread(target_direntry.block.block, tmp);
+  memcpy(&target, tmp, sizeof(inode));
+
+  indirect single;
+  indirect dind;
+
+  int single_loaded = 0;
+  int double_loaded = 0;
+
+  int blocks_allocated = target.size/BLOCKSIZE;
+
+  while(offset + size > blocks_allocated * BLOCKSIZE) {
+    blocknum newblock_target = get_next_free_block();
+    db newblock;
+    for(int i = 0; i < 512; i++){
+      newblock.data[i] = 0;
+    }
+    // write newblock
+    // could theoretically be optimized
+    memset(tmp, 0, BLOCKSIZE);
+    memcpy(tmp, &newblock, sizeof(db));
+    dwrite(newblock_target.block, tmp);
+
+    // put newblock in inode
+    if(blocks_allocated < 116) {
+      target.direct[blocks_allocated] = newblock_target;
+    }
+    else {
+      int index = blocks_allocated - 116;
+      if (index < 128) {
+        if (single_loaded == 0) {
+          if (target.single_indirect.valid == 0){
+            blocknum single_target = get_next_free_block();
+            for(int i = 0; i < 128; i++){
+              single.blocks[i].valid &= 0;
+            }
+            target.single_indirect = single_target;
+          }
+          else {
+            memset(tmp, 0, BLOCKSIZE);
+            dread(target.single_indirect.block, tmp);
+            memcpy(&single, tmp, sizeof(indirect));
+          }
+          single_loaded = 1;
+        }
+        single.blocks[index] = newblock_target;
+      }
+      else {
+        // get double here
+        // allocate necessary blocks in double
+      }
+    }
+  }
+
+  if(single_loaded) {
+    memset(tmp, 0, BLOCKSIZE);
+    memcpy(tmp, &single, sizeof(indirect));
+    dwrite(target.single_indirect.block, tmp);
+  }
+  if(double_loaded) {
+    memset(tmp, 0, BLOCKSIZE);
+    memcpy(tmp, &dind, sizeof(indirect));
+    dwrite(target.double_indirect.block, tmp);
+  }
+
+  int block_offset = offset/512;
+  int byte_offset = offset % 512;
+  int bytes_written = 0;
+  int blocks_to_write = size/512;
+
+  // preload double and single indirects, if needed
+  if (double_loaded == 0 && block_offset + blocks_to_write  >= 244) {
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.double_indirect.block, tmp);
+    memcpy(&dind, tmp, sizeof(indirect));
+    double_loaded = 1;
+  }
+  if (single_loaded == 0 && ((block_offset >= 116 && block_offset < 244) || (block_offset + blocks_to_write >= 116 && block_offset + blocks_to_write < 244))){
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.single_indirect.block, tmp);
+    memcpy(&single, tmp, sizeof(indirect));
+  }
+
+  db loaded;
+  blocknum db_number;
+  for(int i = block_offset; i <= block_offset + blocks_to_write; i++){
+    memset(tmp, 0, BLOCKSIZE);
+    if(i < 116) db_number = target.direct[i];
+    else if (i < 244) db_number = single.blocks[i-116];
+    else {
+      indirect tmp_single;
+      dread(dind.blocks[(i-244)/128].block, tmp);
+      memcpy(&tmp_single, tmp, sizeof(indirect));
+      memset(tmp, 0, BLOCKSIZE);
+      db_number = tmp_single.blocks[(i-244)%128];
+    }
+    dread(db_number.block, tmp);
+    memcpy(&loaded, tmp, sizeof(db));
+    int limit = size - bytes_written > 512 - byte_offset ? 512 - byte_offset : size - bytes_written;
+    byte_offset = i == block_offset ? byte_offset : 0;
+    for (int j = byte_offset; j < limit; j++){
+      loaded.data[j] = buf[bytes_written];
+      bytes_written ++;
+    }
+    memset(tmp, 0, BLOCKSIZE);
+    memcpy(tmp, &loaded, sizeof(db));
+    dwrite(db_number.block, tmp);
+  }
+
+  target.size += bytes_written;
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &target, sizeof(inode));
+  dwrite(target_direntry.block.block, tmp);
+
+  return bytes_written;
 }
 
 /**
