@@ -3,12 +3,25 @@ Team Serendipity presents Cory And gaiL's File System (CALFS).
 Inode is a file system that makes use of meta-information so that it is extremely flexible.
 
 We chose Inode as our disk layout for many reasons.
-1) It doesn't take up a fixed amount of room on the disk
-2) It makes more sense to us to have the file metadata store the
-directory entries.
-3) It makes the extra credit much much easier.
-4) One of the team members thinks FAT is very silly, and that Inode
-makes much more sense to her.
+  1) It doesn't take up a fixed amount of room on the disk
+  2) It makes more sense to us to have the file metadata store the
+     directory entries.
+  3) It makes the extra credit much much easier.
+  4) One of the team members thinks FAT is very silly, and that Inode
+     makes much more sense to her.
 
-Inode implementation details subject to change before the final
-version of the project.
+High-level Approach:
+  Our high-level approach involves storing blocks of pure data and then creating blocks that point to that data containing meta-information on the data. This meta-information may include filename, user id, group id, permissions, timestamps, etc. Each file is then pointed to by a directory. To make sure there is no wasted space the filesystem can turn each block that has nothing pointing to it into a "free" block. Free blocks can be used to store more information.
+
+Challenges Faced:
+  Barriers on communcation, distance and schedules within the team led to the project becoming more difficult than necessary. We both decided to work on functions independently of one another. This theoretically is a fast way of doing things if we each trust the efficiency of each others' code. The problem occurs when one of us needs help. This often involves the partner looking through giant blocks of code to decipher what is happening before being able to start debugging. This could have possibly been solved if we had discussed how our functions worked or created more detailed documentation.
+
+Features:
+  Automatically scans for unused blocks and adds them to available memory.
+  Loads root once into memory. Only writes when changes are made
+  Easily resizable
+  Little overhead
+  Highly versatile/customizable (Such as open-ended file types)
+
+Testing:
+  Testing was mainly done via the test script provided by the professor. In the case where the test script did not provide enough information the programs were run independently. We also output diagnostic messages to stderr.
