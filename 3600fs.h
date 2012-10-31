@@ -19,6 +19,7 @@ static void check_blocks_dnode(blocknum blockNode, char *blockCheck);
 static void check_blocks_inode(blocknum blockNode, char *blockCheck);
 static void check_blocks_direntry(blocknum blockDirentry, char* blockCheck);
 static void check_blocks_dirent(blocknum blockDirent, char* blockCheck);
+static void check_blocks_data(blocknum blockData, char* blockCheck);
 static void check_blocks_indirect_dnode(blocknum blockIndirect, int levels, char *blockCheck);
 static void check_blocks_indirect_inode(blocknum blockIndirect, int levels, char *blockCheck);
 static void check_blocks_free(blocknum blockFree, char *blockCheck);

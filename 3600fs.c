@@ -245,7 +245,7 @@ static void check_blocks_indirect_inode(blocknum blockIndirect, int levels, char
 static void check_blocks_free(blocknum blockFree, char *blockCheck)
 {
 
-  if(blockFree.valid == 0 ||  || *(blockCheck+blockFree.block) == 1)
+  if(blockFree.valid == 0 || *(blockCheck+blockFree.block) == 1)
     return;
 
 
@@ -280,6 +280,17 @@ static void assure_integrity()
   char *blockCheck = calloc(TOTALBLOCKS, sizeof(char));
   check_blocks_free(the_vcb.free, blockCheck);
   check_blocks_dnode(the_vcb.root, blockCheck);
+
+  for(int i = 0; i < TOTALBLOCKS; i++)
+  {
+    if(blockCheck[i] == 1)
+      continue;
+
+    blocknum newBlock;
+    newBlock.block = i;
+    newBlock.valid = 1;
+    free_block(newBlock);
+  }
 }
 
 /*
