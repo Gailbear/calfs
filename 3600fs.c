@@ -849,6 +849,7 @@ static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) 
 static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
+  fprintf(stderr, "vfs_read called\n");
   direntry target_direntry = findFile(path);
 
   // check for valid
@@ -859,6 +860,8 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
   if(target_direntry.type == 'd')
     return -1;
 
+  fprintf(stderr, "file is valid. loading meta data.\n");
+
   // read the inode to target
   inode target;
   char tmp[BLOCKSIZE];
@@ -866,6 +869,7 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
   dread(target_direntry.block.block, tmp);
   memcpy(&target, tmp, sizeof(inode));
 
+  fprintf(stderr, "meta data loaded.\n");
   // can't read the file if the offset is past the size of the file
   if (offset > target.size) return -1;
 
@@ -873,6 +877,8 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
   int byte_offset = offset % 512;
 
   int bytes_read = 0;
+
+  fprintf(stderr, "starting read.\n");
 
   db loaded;
   for(int i = block_offset; i < 116; i++){
@@ -888,6 +894,7 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
       if(loaded.data[j] == EOF){
         return bytes_read;
       }
+      
     }
     if (size <= bytes_read)
       return bytes_read;
@@ -895,8 +902,8 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
 
   // deal with indirects here
 
-// there was an error
-  return -1;
+// no error handling here.
+  return bytes_read;
 
 }
 
@@ -984,6 +991,7 @@ static int vfs_write(const char *path, const char *buf, size_t size,
         // allocate necessary blocks in double
       }
     }
+    blocks_allocated ++;
   }
 
   if(single_loaded) {
@@ -1273,7 +1281,7 @@ static int vfs_truncate(const char *file, off_t offset)
   /* 3600: NOTE THAT ANY BLOCKS FREED BY THIS OPERATION SHOULD
            BE AVAILABLE FOR OTHER FILES TO USE. */
 
-    return 0;
+  
 }
 
 
