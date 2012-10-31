@@ -1270,6 +1270,19 @@ static int vfs_utimens(const char *file, const struct timespec ts[2])
   return 0;
 }
 
+// does NOT write the_vcb to disk
+static void free_block(blocknum b){
+  if(b.valid){
+    freeblock newfree;
+    newfree.next = the_vcb.free;
+    the_vcb.free = b;
+    char tmp[BLOCKSIZE];
+    memset(tmp, 0, BLOCKSIZE);
+    memcpy(tmp, &newfree, sizeof(freeblock));
+    dwrite(b.block, tmp);
+  }
+}
+
 /*
  * This function will truncate the file at the given offset
  * (essentially, it should shorten the file to only be offset
@@ -1281,7 +1294,125 @@ static int vfs_truncate(const char *file, off_t offset)
   /* 3600: NOTE THAT ANY BLOCKS FREED BY THIS OPERATION SHOULD
            BE AVAILABLE FOR OTHER FILES TO USE. */
 
+  direntry target_direntry = findFile(file);
+
+  // check for valid
+  if(target_direntry.block.valid == 0)
+    return -1;
+
+  // check for file
+  if(target_direntry.type == 'd')
+    return -1;
+
+  // read the inode to target
+  inode target;
+  char tmp[BLOCKSIZE];
+  memset(tmp,0,BLOCKSIZE);
+  dread(target_direntry.block.block, tmp);
+  memcpy(&target, tmp, sizeof(inode));
+
+  // offset is larger than file
+  if (target.size < offset) return -1;
+
+  // figure out how many blocks to keep
+  // does ceil work with integer division?
+  int blocks_to_keep = ceil(offset/512);
+
+
+  // TODO fix imprecise handling of partial block truncation
   
+  for(int i = blocks_to_keep  ; i < 116; i++){
+    free_block(target.direct[i]);
+    target.direct[i].valid &= 0;
+  }
+  blocks_to_keep -= 116;
+
+  if(target.single_indirect.valid) {
+    indirect single;
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.single_indirect.block, tmp);
+    memcpy(&single, tmp, sizeof(indirect));
+
+    int block_offset = blocks_to_keep > 0 ? blocks_to_keep : 0;
+
+    for(int i = block_offset ; i < 128; i++){
+      free_block(single.blocks[i]);
+      single.blocks[i].valid &= 0;
+    }
+
+    if (blocks_to_keep <= 0){
+      free_block(target.single_indirect);
+      target.single_indirect.valid &= 0;
+    }
+    else {
+        // write modified single indirect to disk
+        memset(tmp, 0, BLOCKSIZE);
+        memcpy(tmp, &single, sizeof(indirect));
+        dwrite(target.single_indirect.block, tmp);
+    }
+  }
+
+  blocks_to_keep -= 128;
+
+  if(target.double_indirect.valid) {
+    indirect dind;
+    indirect single;
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.double_indirect.block, tmp);
+    memcpy(&dind, tmp, sizeof(indirect));
+
+    int block_offset = blocks_to_keep > 0 ? blocks_to_keep : 0;
+
+    for(int i = 0 ; i < 128; i++){
+      if(block_offset >= 128) {
+        block_offset -= 128;
+        continue;
+      }
+      if(dind.blocks[i].valid){
+        memset(tmp, 0, BLOCKSIZE);
+        dread(dind.blocks[i].block, tmp);
+        memcpy(&single, tmp, sizeof(indirect));
+        for(int j = block_offset ; j < 128; j++){
+          free_block(single.blocks[j]);
+          single.blocks[j].valid &= 0;
+        }
+        if(blocks_to_keep <= i * 128) {
+          free_block(dind.blocks[i]);
+          dind.blocks[i].valid &= 0;
+        }
+        else {
+          block_offset = 0;
+          // write modified single indirect to disk
+          memset(tmp, 0, BLOCKSIZE);
+          memcpy(tmp, &single, sizeof(indirect));
+          dwrite(dind.blocks[i].block, tmp);
+          
+        }
+      }
+    }
+    if(blocks_to_keep <= 0){
+      free_block(target.double_indirect);
+      target.double_indirect.valid &= 0;
+    }else{
+        // write modified double indirect to disk
+        memset(tmp, 0, BLOCKSIZE);
+        memcpy(tmp, &dind, sizeof(indirect));
+        dwrite(target.double_indirect.block, tmp);
+    }
+  }
+
+  // write target to disk
+  target.size = offset;
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &target, sizeof(inode));
+  dwrite(target_direntry.block.block, tmp);
+
+  // write updated vcb to disk
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &the_vcb, sizeof(vcb));
+  dwrite(0, tmp);
+
+  return 0;
 }
 
 
