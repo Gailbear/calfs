@@ -338,7 +338,9 @@ static int vfs_getattr(const char *path, struct stat *stbuf) {
     return 0;
   }
   
-  direntry target_d = findFile(path);
+  blocknum trash;
+  int trash2;
+  direntry target_d = findFile(path, &trash, &trash2);
 
   // if the file wasn't found, throw the expected error
   if (target_d.block.valid == 0) return -ENOENT; 
@@ -506,7 +508,7 @@ static int readdir_dindirect(blocknum block, void *buf, fuse_fill_dir_t filler, 
 
 //Returns direntry of path
 // if it can't be found, returns a direntry with an invalid block
-static direntry findFile(const char *path){
+static direntry findFile(const char *path, blocknum *dntnum, int *entry){
   fprintf(stderr, "findFile called\n");
   // for now, assuming root
   load_root();
@@ -536,18 +538,20 @@ static direntry findFile(const char *path){
       }
       // compare the name
       if (strcmp(filename, contents.entries[j].name) == 0){
-        // we found it! return the direntry
+        // we found it! set the dirent block and return the direntry
+        *entry = j;
+        *dntnum = root.direct[i]; 
         return contents.entries[j];
       }
     }
   }
-  direntry result = findfile_indirect(root.single_indirect, filename);
+  direntry result = findfile_indirect(root.single_indirect, filename, dntnum, entry);
   if (result.block.valid) return result;
-  return findfile_dindirect(root.double_indirect, filename);
+  return findfile_dindirect(root.double_indirect, filename, dntnum, entry);
 }
 
 
-static direntry findfile_indirect(blocknum block, const char *filename){
+static direntry findfile_indirect(blocknum block, const char *filename, blocknum *dntnum, int *entry){
   direntry invalid;
   invalid.block.valid &= 0;
 
@@ -569,6 +573,8 @@ static direntry findfile_indirect(blocknum block, const char *filename){
     for(int j = 0; j < 8; i++){
       if(contents.entries[j].block.valid){
         if(strcmp(contents.entries[j].name, filename)) continue;
+        *entry = j;
+        *dntnum = ind.blocks[i];
         return contents.entries[j];
       }
     }
@@ -577,7 +583,7 @@ static direntry findfile_indirect(blocknum block, const char *filename){
   return invalid;
 }
 
-static direntry findfile_dindirect(blocknum block, const char *filename){
+static direntry findfile_dindirect(blocknum block, const char *filename, blocknum *dntnum, int *entry){
   direntry invalid;
   invalid.block.valid &= 0;
 
@@ -591,7 +597,7 @@ static direntry findfile_dindirect(blocknum block, const char *filename){
   memcpy(&ind, tmp, sizeof(indirect));
 
   for (int i = 0; i < 128; i++){
-    direntry result = findfile_indirect(ind.blocks[i], filename);
+    direntry result = findfile_indirect(ind.blocks[i], filename, dntnum, entry);
     if (result.block.valid) return result;
   }
 
@@ -952,8 +958,10 @@ static blocknum get_next_empty_dirent(int *entry) {
 static int vfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
   fprintf(stderr, "vfs_create called with path %s\n", path);
 
+  blocknum trash;
+  int trash2;
 
-  direntry existing_file = findFile(path);
+  direntry existing_file = findFile(path, &trash, &trash2);
 
   // if the file already exists, return the expected error
   if(existing_file.block.valid) {
@@ -1049,7 +1057,9 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
                     struct fuse_file_info *fi)
 {
   fprintf(stderr, "vfs_read called\n");
-  direntry target_direntry = findFile(path);
+  blocknum trash;
+  int trash2;
+  direntry target_direntry = findFile(path, &trash, &trash2);
 
   // check for valid
   if(target_direntry.block.valid == 0)
@@ -1090,20 +1100,79 @@ static int vfs_read(const char *path, char *buf, size_t size, off_t offset,
     for(int j = byte_offset; j < limit; j++){
       buf[bytes_read] = loaded.data[j];
       bytes_read ++;
-      if(loaded.data[j] == EOF){
-        return bytes_read;
-      }
-      
+      if(bytes_read > target.size) return bytes_read;
     }
     if (size <= bytes_read)
       return bytes_read;
   }
+  
+  block_offset = block_offset - 116 < 0 ? 0 : block_offset - 116;
+  
+  if(target.single_indirect.valid){
+    indirect single;
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.single_indirect.block, tmp);
+    memcpy(&single, tmp, sizeof(indirect));
 
-  // deal with indirects here
+    
+    for(int i = block_offset; i < 128; i++){
+      if(single.blocks[i].valid == 0) continue;
+      memset(tmp, 0, BLOCKSIZE);
+      dread(single.blocks[i].block, tmp);
+      memcpy(&loaded, tmp, sizeof(db));
+      byte_offset = block_offset != i ? 0 : byte_offset;
+      int limit = size - bytes_read <= 512 ? size - bytes_read : 512;
+      for(int j = byte_offset; j < limit; j++){
+        buf[bytes_read] = loaded.data[j];
+        bytes_read ++;
+        if(bytes_read > target.size) return bytes_read;
+      }
+      if (size <= bytes_read)
+        return bytes_read;
+    }
+  }
 
-// no error handling here.
+  block_offset = block_offset - 128 < 0 ? 0 : block_offset - 128;
+
+  if(target.double_indirect.valid){
+    indirect dind;
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.double_indirect.block, tmp);
+    memcpy(&dind, tmp, sizeof(indirect));
+      
+    for(int k = 0; k < 128; k++){
+      if(block_offset > 128){
+        block_offset -= 128;
+        continue;
+      }
+      if(dind.blocks[k].valid){
+        indirect single;
+        memset(tmp, 0, BLOCKSIZE);
+        dread(dind.blocks[k].block, tmp);
+        memcpy(&single, tmp, sizeof(indirect));
+        
+        for(int i = block_offset; i < 128; i++){
+          block_offset = 0;
+          if(single.blocks[i].valid == 0) continue;
+          memset(tmp, 0, BLOCKSIZE);
+          dread(single.blocks[i].block, tmp);
+          memcpy(&loaded, tmp, sizeof(db));
+          byte_offset = block_offset != i ? 0 : byte_offset;
+          int limit = size - bytes_read <= 512 ? size - bytes_read : 512;
+          for(int j = byte_offset; j < limit; j++){
+            buf[bytes_read] = loaded.data[j];
+            bytes_read ++;
+            if(bytes_read > target.size) return bytes_read;
+          }
+          if (size <= bytes_read)
+            return bytes_read;
+        }
+      }
+    }
+  }
+
+  // no error handling here.
   return bytes_read;
-
 }
 
 /*
@@ -1124,7 +1193,9 @@ static int vfs_write(const char *path, const char *buf, size_t size,
   /* 3600: NOTE THAT IF THE OFFSET+SIZE GOES OFF THE END OF THE FILE, YOU
            MAY HAVE TO EXTEND THE FILE (ALLOCATE MORE BLOCKS TO IT). */
 
-  direntry target_direntry = findFile(path);
+  blocknum trash;
+  int trash2;
+  direntry target_direntry = findFile(path, &trash, &trash2);
 
   // check for valid
   if(target_direntry.block.valid == 0)
@@ -1186,8 +1257,49 @@ static int vfs_write(const char *path, const char *buf, size_t size,
         single.blocks[index] = newblock_target;
       }
       else {
-        // get double here
-        // allocate necessary blocks in double
+        index -= 128;
+        if (double_loaded == 0){
+          if (target.double_indirect.valid == 0){
+            blocknum double_target = get_next_free_block();
+            for(int i = 0; i < 128; i++){
+              dind.blocks[i].valid &= 0;
+            }
+            target.double_indirect = double_target;
+          }
+          else {
+            memset(tmp, 0, BLOCKSIZE);
+            dread(target.double_indirect.block, tmp);
+            memcpy(&dind, tmp, sizeof(indirect));
+          }
+          double_loaded = 1;
+        }
+        int i;
+        for(i = 0; i < 128; i++){
+          if (index < 128) break;
+          index -= 128;
+        }
+        if (i == 128){
+          // reached max file capacity
+          return -1;
+        }
+        indirect tmpsingle;
+        if(dind.blocks[i].valid == 0){
+          blocknum single_target = get_next_free_block();
+          for(int j = 0; j < 128; j++){
+            tmpsingle.blocks[j].valid &= 0;
+          }
+          dind.blocks[i] = single_target;
+        }
+        else {
+          memset(tmp, 0, BLOCKSIZE);
+          dread(dind.blocks[i].block, tmp);
+          memcpy(&tmpsingle, tmp, sizeof(indirect));
+        }
+        tmpsingle.blocks[blocks_allocated] = newblock_target;
+        // write back to the tmp single
+        memset(tmp, 0, BLOCKSIZE);
+        memcpy(tmp, &tmpsingle, sizeof(indirect));
+        dwrite(dind.blocks[i].block, tmp);
       }
     }
     blocks_allocated ++;
@@ -1265,90 +1377,89 @@ static int vfs_delete(const char *path)
   // for now, assuming root
   load_root();
   
-  const char *filename = path + 1;
+  // find and load the file
+  blocknum target_dirent_block;
+  int entry;
+  direntry target_direntry = findFile(path, &target_dirent_block, &entry);
 
-  blocknum target_block;
-  int found = 0;
-
-  char tmp[BLOCKSIZE];
-
-  dirent contents;
-  // for all the dirent blocks
-  for (int i = 0; i < 116; i++){
-    if(root.direct[i].valid == 0) {
-      fprintf(stderr, "direct %d is invalid\n", i);
-      continue;
-    }
-    // load the ith dirent block
-    memset(tmp, 0, BLOCKSIZE);
-    dread(root.direct[i].block,tmp);
-    memcpy(&contents, tmp, sizeof(dirent));
-    fprintf(stderr, "dirent %d loaded\n", i);
-    // for each entry in the dirent block
-    for (int j = 0; j < 8; j++) {
-      // continue if entry is invalid
-      if (contents.entries[j].block.valid == 0) {
-        //fprintf(stderr, "entry %d in dirent %d is invalid.\n", j ,i);
-        continue;
-      }
-      // compare the name
-      if (strcmp(filename, contents.entries[j].name) == 0){
-        // make sure the file is a file
-        if(contents.entries[j].type != 'f') {
-          return -1;
-        }
-        // remember the direntry
-        target_block = contents.entries[j].block;
-        // set entry invalid
-        contents.entries[j].block.valid &= 0;
-        // set found flag for quicker exit
-        found = 1;
-        break;
-      }
-    }
-    // write dirent and quick exit
-    if (found) {
-      memset(tmp, 0, BLOCKSIZE);
-      memcpy(tmp, &contents, sizeof(dirent));
-      dwrite(root.direct[i].block, tmp);
-      break;
-    }
-  }
-
-  // if the file doesn't exist
-  if (found == 0) {
+  if (target_direntry.block.valid == 0){
+    // could not find file
     return -1;
   }
 
-
-  /* TODO check for datablocks used by file, remove those
   inode target;
   char tmp[BLOCKSIZE];
   memset(tmp, 0, BLOCKSIZE);
-  dread(target_block.block, tmp);
+  dread(target_direntry.block.block, tmp);
   memcpy(&target, tmp, sizeof(inode));
 
-  */
 
-  // make a freeblock pointing to the current freeblock
-  // write it over the inode
-  freeblock newfree;
-  newfree.next = the_vcb.free;
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(tmp, &newfree, sizeof(freeblock));
-  dwrite(target_block.block, tmp);
-  
-  // unsure if this line is necessary
-  // don't know if setting the address to invalid above changes target_block
-  // better safe than sorry
-  target_block.valid |= 1;
+  //  check for datablocks used by file, remove those
+  for (int i = 0; i < 116; i++){
+    if(target.direct[i].valid){
+      free_block(target.direct[i]);
+    }
+  }
+  if(target.single_indirect.valid){
+    // load single indirect
+    indirect single;
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.single_indirect.block, tmp);
+    memcpy(&single, tmp, sizeof(indirect));
 
-  // point the_vcb.free to the new freeblock
-  // write it
-  the_vcb.free = target_block;
+    for(int i = 0; i < 128; i++){
+      if(single.blocks[i].valid){
+        free_block(single.blocks[i]);
+      }
+    }
+
+    free_block(target.single_indirect);
+  }
+
+  if(target.double_indirect.valid){
+    indirect dind;
+    memset(tmp, 0, BLOCKSIZE);
+    dread(target.double_indirect.block, tmp);
+    memcpy(&dind, tmp, sizeof(indirect));
+
+    indirect single;
+    for(int j = 0; j < 128; j++){
+      if(dind.blocks[j].valid == 0) continue;
+      memset(tmp, 0, BLOCKSIZE);
+      dread(dind.blocks[j].block, tmp);
+      memcpy(&single, tmp, sizeof(indirect));
+
+      for(int i = 0; i < 128; i++){
+        if(single.blocks[i].valid){
+          free_block(single.blocks[i]);
+        }
+      }
+      free_block(dind.blocks[j]);
+    }
+    free_block(target.double_indirect);
+  }
+
+  // free inode
+  free_block(target_direntry.block);
+
+  // write the vcb
   memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &the_vcb, sizeof(vcb));
   dwrite(0, tmp);
+
+  // load the dirent
+  dirent dnt;
+  memset(tmp, 0, BLOCKSIZE);
+  dread(target_dirent_block.block, tmp);
+  memcpy(&dnt, tmp, sizeof(dirent));
+
+  // change the dirent
+  dnt.entries[entry].block.valid &= 0;
+
+  // write the dirent
+  memset(tmp, 0, BLOCKSIZE);
+  memcpy(tmp, &dnt, sizeof(dirent));
+  dwrite(target_dirent_block.block, tmp);
 
   return 0;
 }
@@ -1362,7 +1473,20 @@ static int vfs_delete(const char *path)
  */
 static int vfs_rename(const char *from, const char *to)
 {
-    return 0;
+  blocknum dirent_block;
+  int entry;
+  direntry target = findFile(from, &dirent_block, &entry);
+
+  if(target.block.valid){
+     // load dirent
+
+     // change dirent
+
+     // write dirent
+     return 0;
+  }
+
+  return -1;
 }
 
 
@@ -1379,7 +1503,9 @@ static int vfs_rename(const char *from, const char *to)
 static int vfs_chmod(const char *file, mode_t mode)
 {
   //find the block
-  direntry target_d = findFile(file);
+  blocknum trash;
+  int trash2;
+  direntry target_d = findFile(file, &trash, &trash2);
 
   //handle broken file here?
 
@@ -1411,7 +1537,9 @@ static int vfs_chmod(const char *file, mode_t mode)
 static int vfs_chown(const char *file, uid_t uid, gid_t gid)
 {
   //find the block
-  direntry target_d = findFile(file);
+  blocknum trash;
+  int trash2;
+  direntry target_d = findFile(file, &trash, &trash2);
 
   //handle broken file here?
 
@@ -1443,7 +1571,9 @@ static int vfs_chown(const char *file, uid_t uid, gid_t gid)
 static int vfs_utimens(const char *file, const struct timespec ts[2])
 {
   //find the block
-  direntry target_d = findFile(file);
+  blocknum trash;
+  int trash2;
+  direntry target_d = findFile(file, &trash, &trash2);
 
   //handle broken file here?
 
@@ -1492,7 +1622,9 @@ static int vfs_truncate(const char *file, off_t offset)
   /* 3600: NOTE THAT ANY BLOCKS FREED BY THIS OPERATION SHOULD
            BE AVAILABLE FOR OTHER FILES TO USE. */
 
-  direntry target_direntry = findFile(file);
+  blocknum trash;
+  int trash2;
+  direntry target_direntry = findFile(file, &trash, &trash2);
 
   // check for valid
   if(target_direntry.block.valid == 0)
