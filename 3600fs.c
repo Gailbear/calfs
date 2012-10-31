@@ -72,15 +72,214 @@ static void* vfs_mount(struct fuse_conn_info *conn) {
 
   if (the_vcb.clean == 1){
     the_vcb.clean = 0;
-    memcpy(tmp, &the_vcb, sizeof(vcb));
-    dwrite(0, tmp);
   }else {
     // check the disk
+    assure_integrity();
     // then set vcb to 0
+    the_vcb.clean = 0;
   }
+
+  //update the vcb
+  memcpy(tmp, &the_vcb, sizeof(vcb));
+  dwrite(0, tmp);
 
 
   return NULL;
+}
+
+static void check_blocks_dnode(blocknum blockNode, char *blockCheck)
+{
+
+  if(blockNode.valid == 0 || *(blockCheck+blockNode.block) == 1)
+    return;
+
+
+  //It's valid. Track it
+  *(blockCheck+blockNode.block) = 1;
+
+  //Read it into memory
+  dnode currNode;
+  char tmp[BLOCKSIZE];
+
+  memset(tmp, 0, BLOCKSIZE);
+  dread(blockNode.block, tmp);
+  memcpy(&currNode,tmp,sizeof(dnode));
+
+  for(int i = 0; i < 116; i++)
+    check_blocks_dirent(currNode.direct[i], blockCheck);
+
+  check_blocks_indirect_dnode(currNode.single_indirect, 1, blockCheck);
+  check_blocks_indirect_dnode(currNode.double_indirect, 2, blockCheck);
+}
+
+static void check_blocks_inode(blocknum blockNode, char *blockCheck)
+{
+
+  if(blockNode.valid == 0 || *(blockCheck+blockNode.block) == 1)
+    return;
+
+
+  //It's valid. Track it
+  *(blockCheck+blockNode.block) = 1;
+
+  //Read it into memory
+  inode currNode;
+  char tmp[BLOCKSIZE];
+
+  memset(tmp, 0, BLOCKSIZE);
+  dread(blockNode.block, tmp);
+  memcpy(&currNode,tmp,sizeof(inode));
+
+  for(int i = 0; i < 116; i++)
+    check_blocks_data(currNode.direct[i], blockCheck);
+
+  check_blocks_indirect_inode(currNode.single_indirect, 1, blockCheck);
+  check_blocks_indirect_inode(currNode.double_indirect, 2, blockCheck);
+}
+
+
+static void check_blocks_direntry(blocknum blockDirentry, char* blockCheck)
+{
+  if(blockDirentry.valid == 0 || *(blockCheck+blockDirentry.block) == 1)
+    return;
+
+  //It's valid. Track it
+  *(blockCheck+blockDirentry.block) = 1;
+
+  //Read it into memory
+  direntry currDirentry;
+  char tmp[BLOCKSIZE];
+
+  memset(tmp, 0, BLOCKSIZE);
+  dread(blockDirentry.block, tmp);
+  memcpy(&currDirentry,tmp,sizeof(direntry));
+
+  if(currDirentry.type == 'd')
+    check_blocks_dnode(currDirentry.block, blockCheck);
+  else
+    check_blocks_inode(currDirentry.block, blockCheck);
+}
+
+
+static void check_blocks_dirent(blocknum blockDirent, char* blockCheck)
+{
+  if(blockDirent.valid == 0 || *(blockCheck+blockDirent.block) == 1)
+    return;
+
+  //It's valid. Track it
+  *(blockCheck+blockDirent.block) = 1;
+
+  dirent currDirent;
+  char tmp[BLOCKSIZE];
+
+  memset(tmp, 0, BLOCKSIZE);
+  dread(blockDirent.block, tmp);
+  memcpy(&currDirent,tmp,sizeof(dirent));
+
+  for(int i = 0; i < 8; i++)
+    check_blocks_direntry(currDirent.entries[i].block, blockCheck);
+}
+
+static void check_blocks_data(blocknum blockData, char* blockCheck)
+{
+  if(blockData.valid == 0 || *(blockCheck+blockData.block) == 1)
+    return;
+
+  //It's valid. Track it
+  *(blockCheck+blockData.block) = 1;
+}
+
+static void check_blocks_indirect_dnode(blocknum blockIndirect, int levels, char *blockCheck)
+{
+  if(blockIndirect.valid == 0 || *(blockCheck+blockIndirect.block) == 1)
+    return;
+
+  //It's valid. Track it
+  *(blockCheck+blockIndirect.block) = 1;
+
+  if(levels == 0)
+  {
+    check_blocks_dirent(blockIndirect, blockCheck);
+  }
+  else
+  {
+    indirect currIndirect;
+    char tmp[BLOCKSIZE];
+
+    memset(tmp, 0, BLOCKSIZE);
+    dread(blockIndirect.block, tmp);
+    memcpy(&currIndirect,tmp,sizeof(indirect));
+
+    for(int i = 0; i < BLOCKSIZE/4; i++)
+      check_blocks_indirect_dnode(currIndirect.blocks[i], levels-1, blockCheck);
+  }
+}
+
+
+static void check_blocks_indirect_inode(blocknum blockIndirect, int levels, char *blockCheck)
+{
+  if(blockIndirect.valid == 0 || *(blockCheck+blockIndirect.block) == 1)
+    return;
+
+  //It's valid. Track it
+  *(blockCheck+blockIndirect.block) = 1;
+
+  if(levels == 0)
+  {
+    check_blocks_data(blockIndirect, blockCheck);
+  }
+  else
+  {
+    indirect currIndirect;
+    char tmp[BLOCKSIZE];
+
+    memset(tmp, 0, BLOCKSIZE);
+    dread(blockIndirect.block, tmp);
+    memcpy(&currIndirect,tmp,sizeof(indirect));
+
+    for(int i = 0; i < BLOCKSIZE/4; i++)
+      check_blocks_indirect_inode(currIndirect.blocks[i], levels-1, blockCheck);
+  }
+}
+
+static void check_blocks_free(blocknum blockFree, char *blockCheck)
+{
+
+  if(blockFree.valid == 0 ||  || *(blockCheck+blockFree.block) == 1)
+    return;
+
+
+  freeblock currBlock;
+  char tmp[BLOCKSIZE];
+
+
+  //Loop through all the free blocks until you hit a non-valid. Keeping track of valid
+  for(blocknum currBlocknum = blockFree; currBlocknum.valid; currBlocknum = currBlock.next)
+  {
+
+    //It's valid. Track it
+    *(blockCheck+currBlocknum.block) = 1;
+
+    memset(tmp, 0, BLOCKSIZE);
+    dread(currBlocknum.block, tmp);
+    memcpy(&currBlock,tmp,sizeof(freeblock));
+  }
+}
+
+static void assure_integrity()
+{
+  //116 direct blocks
+  int TOTALBLOCKS = 116;
+
+  //BLOCKSIZE/4 in indirect block
+  TOTALBLOCKS += BLOCKSIZE/4;
+
+  //(BLOCKSIZE/4)^2 in double indirect block
+  TOTALBLOCKS += pow((BLOCKSIZE/4), 2);
+
+  char *blockCheck = calloc(TOTALBLOCKS, sizeof(char));
+  check_blocks_free(the_vcb.free, blockCheck);
+  check_blocks_dnode(the_vcb.root, blockCheck);
 }
 
 /*
@@ -1163,7 +1362,6 @@ static int vfs_delete(const char *path)
  */
 static int vfs_rename(const char *from, const char *to)
 {
-
     return 0;
 }
 

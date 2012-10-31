@@ -14,6 +14,16 @@ static direntry findfile_indirect(blocknum block, const char *path);
 static direntry findfile_dindirect(blocknum block, const char *path);
 static int readdir_indirect(blocknum block, void *buf, fuse_fill_dir_t filler, off_t offset);
 static int readdir_dindirect(blocknum block, void *buf, fuse_fill_dir_t filler, off_t offset);
+
+static void check_blocks_dnode(blocknum blockNode, char *blockCheck);
+static void check_blocks_inode(blocknum blockNode, char *blockCheck);
+static void check_blocks_direntry(blocknum blockDirentry, char* blockCheck);
+static void check_blocks_dirent(blocknum blockDirent, char* blockCheck);
+static void check_blocks_indirect_dnode(blocknum blockIndirect, int levels, char *blockCheck);
+static void check_blocks_indirect_inode(blocknum blockIndirect, int levels, char *blockCheck);
+static void check_blocks_free(blocknum blockFree, char *blockCheck);
+static void assure_integrity();
+
 //static blocknum startFindPath(direntry startingDir, const char *path);
 //static blocknum findPath(const char *path);
 static void load_root();
