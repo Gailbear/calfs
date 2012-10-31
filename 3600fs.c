@@ -89,7 +89,7 @@ static void* vfs_mount(struct fuse_conn_info *conn) {
 
 static void check_blocks_dnode(blocknum blockNode, char *blockCheck)
 {
-
+  //Is the block valid and has it been checked already?
   if(blockNode.valid == 0 || *(blockCheck+blockNode.block) == 1)
     return;
 
@@ -100,21 +100,22 @@ static void check_blocks_dnode(blocknum blockNode, char *blockCheck)
   //Read it into memory
   dnode currNode;
   char tmp[BLOCKSIZE];
-
   memset(tmp, 0, BLOCKSIZE);
   dread(blockNode.block, tmp);
   memcpy(&currNode,tmp,sizeof(dnode));
 
+  //Loop through all the dirents. Tracking each reference
   for(int i = 0; i < 116; i++)
     check_blocks_dirent(currNode.direct[i], blockCheck);
 
+  //Check the single and double indirects. Tracking each reference
   check_blocks_indirect_dnode(currNode.single_indirect, 1, blockCheck);
   check_blocks_indirect_dnode(currNode.double_indirect, 2, blockCheck);
 }
 
 static void check_blocks_inode(blocknum blockNode, char *blockCheck)
 {
-
+  //Is the block valid and has it been checked already?
   if(blockNode.valid == 0 || *(blockCheck+blockNode.block) == 1)
     return;
 
@@ -130,9 +131,11 @@ static void check_blocks_inode(blocknum blockNode, char *blockCheck)
   dread(blockNode.block, tmp);
   memcpy(&currNode,tmp,sizeof(inode));
 
+  //Loop through all the data blocks. Tracking each reference
   for(int i = 0; i < 116; i++)
     check_blocks_data(currNode.direct[i], blockCheck);
 
+  //Check the single and double indirects. Tracking each reference
   check_blocks_indirect_inode(currNode.single_indirect, 1, blockCheck);
   check_blocks_indirect_inode(currNode.double_indirect, 2, blockCheck);
 }
@@ -140,6 +143,7 @@ static void check_blocks_inode(blocknum blockNode, char *blockCheck)
 
 static void check_blocks_direntry(blocknum blockDirentry, char* blockCheck)
 {
+  //Is the block valid and has it been checked already?
   if(blockDirentry.valid == 0 || *(blockCheck+blockDirentry.block) == 1)
     return;
 
@@ -149,11 +153,11 @@ static void check_blocks_direntry(blocknum blockDirentry, char* blockCheck)
   //Read it into memory
   direntry currDirentry;
   char tmp[BLOCKSIZE];
-
   memset(tmp, 0, BLOCKSIZE);
   dread(blockDirentry.block, tmp);
   memcpy(&currDirentry,tmp,sizeof(direntry));
 
+  //If it's a directory, treat it like one and check it's references. Otherwise check files'
   if(currDirentry.type == 'd')
     check_blocks_dnode(currDirentry.block, blockCheck);
   else
@@ -163,19 +167,21 @@ static void check_blocks_direntry(blocknum blockDirentry, char* blockCheck)
 
 static void check_blocks_dirent(blocknum blockDirent, char* blockCheck)
 {
+  //Is the block valid and has it been checked already?
   if(blockDirent.valid == 0 || *(blockCheck+blockDirent.block) == 1)
     return;
 
   //It's valid. Track it
   *(blockCheck+blockDirent.block) = 1;
 
+  //Read it into memory
   dirent currDirent;
   char tmp[BLOCKSIZE];
-
   memset(tmp, 0, BLOCKSIZE);
   dread(blockDirent.block, tmp);
   memcpy(&currDirent,tmp,sizeof(dirent));
 
+  //Loop through each directory entry. Tracking each reference
   for(int i = 0; i < 8; i++)
     check_blocks_direntry(currDirent.entries[i].block, blockCheck);
 }
@@ -191,25 +197,29 @@ static void check_blocks_data(blocknum blockData, char* blockCheck)
 
 static void check_blocks_indirect_dnode(blocknum blockIndirect, int levels, char *blockCheck)
 {
+  //Is the block valid and has it been checked already?
   if(blockIndirect.valid == 0 || *(blockCheck+blockIndirect.block) == 1)
     return;
 
   //It's valid. Track it
   *(blockCheck+blockIndirect.block) = 1;
 
+
+  //Sees how many levels of indirects it must go through. If none, treat it like a direct
   if(levels == 0)
   {
     check_blocks_dirent(blockIndirect, blockCheck);
   }
   else
   {
+    //Read indirect block into memory
     indirect currIndirect;
     char tmp[BLOCKSIZE];
-
     memset(tmp, 0, BLOCKSIZE);
     dread(blockIndirect.block, tmp);
     memcpy(&currIndirect,tmp,sizeof(indirect));
 
+    //Loop through each reference
     for(int i = 0; i < BLOCKSIZE/4; i++)
       check_blocks_indirect_dnode(currIndirect.blocks[i], levels-1, blockCheck);
   }
@@ -218,25 +228,28 @@ static void check_blocks_indirect_dnode(blocknum blockIndirect, int levels, char
 
 static void check_blocks_indirect_inode(blocknum blockIndirect, int levels, char *blockCheck)
 {
+  //Is the block valid and has it been checked already?
   if(blockIndirect.valid == 0 || *(blockCheck+blockIndirect.block) == 1)
     return;
 
   //It's valid. Track it
   *(blockCheck+blockIndirect.block) = 1;
 
+  //Sees how many levels of indirects it must go through. If none, treat it like a direct
   if(levels == 0)
   {
     check_blocks_data(blockIndirect, blockCheck);
   }
   else
   {
+    //Read indirect block into memory
     indirect currIndirect;
     char tmp[BLOCKSIZE];
-
     memset(tmp, 0, BLOCKSIZE);
     dread(blockIndirect.block, tmp);
     memcpy(&currIndirect,tmp,sizeof(indirect));
 
+    //Loop through each reference
     for(int i = 0; i < BLOCKSIZE/4; i++)
       check_blocks_indirect_inode(currIndirect.blocks[i], levels-1, blockCheck);
   }
@@ -244,7 +257,7 @@ static void check_blocks_indirect_inode(blocknum blockIndirect, int levels, char
 
 static void check_blocks_free(blocknum blockFree, char *blockCheck)
 {
-
+  //Is the block valid and has it been checked already?
   if(blockFree.valid == 0 || *(blockCheck+blockFree.block) == 1)
     return;
 
@@ -253,7 +266,7 @@ static void check_blocks_free(blocknum blockFree, char *blockCheck)
   char tmp[BLOCKSIZE];
 
 
-  //Loop through all the free blocks until you hit a non-valid. Keeping track of valid
+  //Loop through all the free blocks until you hit a non-valid. Keeping track of valid references
   for(blocknum currBlocknum = blockFree; currBlocknum.valid; currBlocknum = currBlock.next)
   {
 
@@ -277,10 +290,12 @@ static void assure_integrity()
   //(BLOCKSIZE/4)^2 in double indirect block
   TOTALBLOCKS += pow((BLOCKSIZE/4), 2);
 
+  //Create a list of all blocks referenced in some path from the_vcb
   char *blockCheck = calloc(TOTALBLOCKS, sizeof(char));
   check_blocks_free(the_vcb.free, blockCheck);
   check_blocks_dnode(the_vcb.root, blockCheck);
 
+  //Now take that list and change all the nonreferenced to free blocks
   for(int i = 0; i < TOTALBLOCKS; i++)
   {
     if(blockCheck[i] == 1)
@@ -616,69 +631,6 @@ static direntry findfile_dindirect(blocknum block, const char *filename, blocknu
 }
 
 
-
-
-
-/*
-//Returns blocknum pointing to DNODE of path within startingDir
-static blocknum startFindPath(direntry startingDir, const char *path)
-{
-  dnode dirMeta;
-  char tmp[BLOCKSIZE];
-
-  //Get rid of absolute path
-  if(*path == '/') path++;
-
-  //Check if we are currently in the correct directory
-  if(strlen(path) == 0)
-    return startingDir.block;
-
-  //If not in the correct directory, get meta data
-  memset(tmp, 0, BLOCKSIZE);
-  dread(startingDir.block.block, tmp);
-  memcpy(dirMeta, tmp, sizeof(dnode));
-  //If permissions don't match up, kick em out.
-  if(dirMeta.user != getuid() && dirMeta.group != getgid())
-  {
-    blocknum noPerms;
-    noPerms.block = -2;
-    noPerms.valid |= 1;
-    return noPerms;
-  }
-
-  //If permissions do match up, try to traverse
-  int i = 0;
-  char *firstSlash = strchr(path, '/');
-  if(firstSlash == NULL) firstSlash = path+strlen(path);
-
-  char targetDir[(firstSlash-path)+1];
-  strncpy(targetDir, path, firstSlash-path);
-  targetDir[(firstSlash-path)] = '\0';
-
-  for(i = 0; i < 116; i++)
-  {
-    //If the block isn't valid, jump
-    if(dirMeta.direct[i].valid == 0) continue;
-
-    //If the names match traverse
-    direntry myDir;
-
-    memset(tmp, 0, BLOCKSIZE);
-    dread(dirMeta.direct[i].block, tmp);
-    memcpy(&myDir, tmp, sizeof(direntry));
-
-    if(strcmp(myDir.name, targetDir) == 0)
-        return startFindPath(myDir, firstSlash);
-
-  }
-
-  //Directory not found
-  blocknum nonExistant;
-  nonExistant.valid = 0;
-  return nonExistant;
-}
-
-*/
 // loads root to memory if not already loaded
 static void load_root(){
   if (root_loaded) return;
@@ -690,22 +642,6 @@ static void load_root(){
   fprintf(stderr, "root loaded!\n");
   return;
 }
-/*
-
-//Returns blocknum pointing to DNODE of path
-static blocknum findPath(const char *path)
-{
-  direntry rootDir;
-  char tmp[BLOCKSIZE];
-    
-  memset(tmp, 0, BLOCKSIZE);
-  memcpy(&rootDir, tmp, sizeof(direntry));
-          
-  return startFindPath(rootDir, path);
-
-}
-
-*/
 
 // gets the next free block from the vcb
 // sets the vcb's free block to the subsequent one
