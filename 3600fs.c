@@ -1444,6 +1444,7 @@ static int vfs_truncate(const char *file, off_t offset)
 
   // offset is larger than file
   if (target.size < offset) return -1;
+  target.size = offset;
 
   // figure out how many blocks to keep
   // does ceil work with integer division?
@@ -1533,7 +1534,6 @@ static int vfs_truncate(const char *file, off_t offset)
   }
 
   // write target to disk
-  target.size = offset;
   memset(tmp, 0, BLOCKSIZE);
   memcpy(tmp, &target, sizeof(inode));
   dwrite(target_direntry.block.block, tmp);
